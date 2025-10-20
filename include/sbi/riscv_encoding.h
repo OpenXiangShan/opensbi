@@ -367,6 +367,7 @@
 #define CSR_HIE				0x604
 #define CSR_HCOUNTEREN			0x606
 #define CSR_HGEIE			0x607
+#define CSR_HCONTEXT			0x6A8
 
 /* Hypervisor Configuration */
 #define CSR_HENVCFG			0x60a
