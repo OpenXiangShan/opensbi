@@ -25,7 +25,7 @@ static int kmh_v2_extensions_init(const struct fdt_match *match,
 	return 0;
 }
 
-static int kmh_v2_final_init(bool cold_boot, 
+static int kmh_v2_final_init(bool cold_boot,
 		const struct fdt_match *match)
 {
 	return 0;
