@@ -25,6 +25,9 @@
 #include <sbi/sbi_timer.h>
 #include <libfdt_env.h>
 #include <sbi/sbi_scratch.h>
+#include <libfdt.h>
+#include <sbi_utils/fdt/fdt_helper.h>
+#include <sbi_utils/fdt/fdt_fixup.h>
 
 #define CPU_N_PWRCTL_BASE(n) \
     ((volatile uint64_t *) (uintptr_t) ((n) == 0 ? 0x35080000 : \
@@ -290,12 +293,63 @@ static struct sbi_ipi_event_ops kmh_ipi_process_ops = {
     .process = pwrctl_ipi_process,
 };
 
+bool dtb_has_hcontext_property()
+{
+    int cpus_node, len;
+    const void *prop;
+    const void *fdt = fdt_get_address();
+
+
+    if (!fdt)
+        return false;
+
+    int root_node = fdt_path_offset(fdt, "/");
+    if (root_node >= 0) {
+        prop = fdt_getprop(fdt, root_node, "has_hcontext", &len);
+        if (prop && len >= 0) {
+            sbi_printf("DTB: Found has_hcontext in root node\n");
+            return true;
+        }
+    }
+
+    cpus_node = fdt_path_offset(fdt, "/cpus");
+    if (cpus_node < 0) {
+        sbi_printf("DTB: Failed to find cpus node\n");
+        return false;
+    }
+
+    prop = fdt_getprop(fdt, cpus_node, "has_hcontext", &len);
+    if (prop && len >= 0) {
+        sbi_printf("DTB: Found has_hcontext property in cpus node\n");
+        return true;
+    }
+
+    sbi_printf("DTB: has_hcontext property not found\n");
+    return false;
+}
+
+static int kmh_v2_early_init(bool cold_boot,
+                const struct fdt_match *match)
+{
+         if(dtb_has_hcontext_property())
+                 csr_write(CSR_HCONTEXT, 0x00);
+
+        return 0;
+}
+
 static int kmh_v2_final_init(bool cold_boot,
                                 const struct fdt_match *match)
 {
     int rc = 0;
     u32 hartid = 0;
     struct kmh_powerdown_ipi_info *ipi_info;
+
+     if(dtb_has_hcontext_property())
+     {
+        /* as the debug info reserved.*/
+         sbi_printf("%s:  MSTATEEN0=0x%lx \n", __func__, csr_read(CSR_MSTATEEN0));
+         sbi_printf("%s:  CSR_HCONTEXT=0x%lx \n", __func__, csr_read(CSR_HCONTEXT));
+     }
 
     if (cold_boot) {
         sbi_hsm_set_device(&kmh_cpu);
@@ -338,6 +392,7 @@ static int kmh_v2_pmu_init(const struct fdt_match *match)
 
 const struct platform_override kmh_v2 = {
     .match_table	= kmh_v2_match,
+    .early_init     = kmh_v2_early_init,
     .final_init = kmh_v2_final_init,
     .extensions_init = kmh_v2_extensions_init,
     .pmu_init = kmh_v2_pmu_init,

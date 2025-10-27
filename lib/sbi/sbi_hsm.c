@@ -25,9 +25,6 @@
 #include <sbi/sbi_system.h>
 #include <sbi/sbi_timer.h>
 #include <sbi/sbi_console.h>
-#include <libfdt.h>
-#include <sbi_utils/fdt/fdt_helper.h>
-#include <sbi_utils/fdt/fdt_fixup.h>
 
 #define __sbi_hsm_hart_change_state(hdata, oldstate, newstate)		\
 ({									\
@@ -144,45 +141,6 @@ int sbi_hsm_hart_interruptible_mask(const struct sbi_domain *dom,
 	return 0;
 }
 
-bool dtb_has_hcontext_property()
-{
-    int cpus_node, len;
-    const void *prop;
-    const void *fdt = fdt_get_address();
-
-
-    if (!fdt)
-        return false;
-
-    int root_node = fdt_path_offset(fdt, "/");
-    if (root_node >= 0) {
-        prop = fdt_getprop(fdt, root_node, "has_hcontext", &len);
-        if (prop && len >= 0) {
-            sbi_printf("DTB: Found has_hcontext in root node\n");
-            return true;
-        }
-    }
-
-    cpus_node = fdt_path_offset(fdt, "/cpus");
-    if (cpus_node < 0) {
-        sbi_printf("DTB: Failed to find cpus node\n");
-        return false;
-    }
-
-    prop = fdt_getprop(fdt, cpus_node, "has_hcontext", &len);
-    if (prop && len >= 0) {
-        sbi_printf("DTB: Found has_hcontext property in cpus node\n");
-        return true;
-    }
-
-    sbi_printf("DTB: has_hcontext property not found\n");
-    return false;
-}
-
-/*  as the debug info reserved.
-extern  uint64_t  hcontext_value;
-extern  uint64_t  masteen0_value;
-*/
 void __noreturn sbi_hsm_hart_start_finish(struct sbi_scratch *scratch,
 					  u32 hartid)
 {
@@ -201,16 +159,6 @@ void __noreturn sbi_hsm_hart_start_finish(struct sbi_scratch *scratch,
 	next_mode = scratch->next_mode;
 	hsm_start_ticket_release(hdata);
 
-	if(dtb_has_hcontext_property())
-	{
-	/* as the debug info reserved.*/
-	 sbi_printf("%s:  MSTATEEN0=0x%lx \n", __func__, csr_read(CSR_MSTATEEN0));
-	 sbi_printf("%s:  CSR_HCONTEXT=0x%lx \n", __func__, csr_read(CSR_HCONTEXT));
-	}
-	/*
-	 sbi_printf("%s: earier CSR_HCONTEXT=0x%lx \n", __func__, hcontext_value);
-	 sbi_printf("%s: earier masteen0_value=0x%lx \n", __func__, masteen0_value);
-	*/
 	sbi_hart_switch_mode(hartid, next_arg1, next_addr, next_mode, false);
 }
 

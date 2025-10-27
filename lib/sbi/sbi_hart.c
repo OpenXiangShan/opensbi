@@ -26,7 +26,6 @@
 
 extern void __sbi_expected_trap(void);
 extern void __sbi_expected_trap_hext(void);
-extern bool dtb_has_hcontext_property();
 
 void (*sbi_hart_expected_trap)(void) = &__sbi_expected_trap;
 
@@ -109,8 +108,6 @@ static void mstatus_init(struct sbi_scratch *scratch)
 #if __riscv_xlen == 32
 		csr_write(CSR_MSTATEEN0H, mstateen_val >> 32);
 #endif
-		if(dtb_has_hcontext_property())
-			csr_write(CSR_HCONTEXT, 0x00);
 	}
 
 	if (sbi_hart_priv_version(scratch) >= SBI_HART_PRIV_VER_1_12) {
