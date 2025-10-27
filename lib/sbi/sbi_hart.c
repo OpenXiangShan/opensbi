@@ -26,12 +26,11 @@
 
 extern void __sbi_expected_trap(void);
 extern void __sbi_expected_trap_hext(void);
+extern bool dtb_has_hcontext_property();
 
 void (*sbi_hart_expected_trap)(void) = &__sbi_expected_trap;
 
 static unsigned long hart_features_offset;
-uint64_t  hcontext_value=0;
-uint64_t  masteen0_value=0;
 static void mstatus_init(struct sbi_scratch *scratch)
 {
 	int cidx;
@@ -110,11 +109,9 @@ static void mstatus_init(struct sbi_scratch *scratch)
 #if __riscv_xlen == 32
 		csr_write(CSR_MSTATEEN0H, mstateen_val >> 32);
 #endif
-		csr_write(CSR_HCONTEXT, 0x00);
+		if(dtb_has_hcontext_property())
+			csr_write(CSR_HCONTEXT, 0x00);
 	}
-
-	hcontext_value = csr_read(CSR_HCONTEXT);
-	masteen0_value = csr_read(CSR_MSTATEEN0);
 
 	if (sbi_hart_priv_version(scratch) >= SBI_HART_PRIV_VER_1_12) {
 		menvcfg_val = csr_read(CSR_MENVCFG);
