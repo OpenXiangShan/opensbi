@@ -1,7 +1,10 @@
 /*
  * SPDX-License-Identifier: BSD-2-Clause
  *
- * Copyright (c) 2025 Yangyinglu  <yangyinglu@bosc.cn>
+ * Copyright (c) 2025 Bosc
+ *
+ * Authors: Yangyinglu  <yangyinglu@bosc.cn>
+ *          Chengbo Gao <gaochengbo@bosc.ac.cn>
  */
 
 #include <platform_override.h>
@@ -16,36 +19,326 @@
 #include <sbi_utils/fdt/fdt_fixup.h>
 #include <sbi_utils/fdt/fdt_helper.h>
 #include <sbi_utils/irqchip/fdt_irqchip_plic.h>
+#include <sbi/riscv_encoding.h>
 #include <sbi/sbi_console.h>
+#include <sbi/sbi_ipi.h>
+#include <sbi/sbi_timer.h>
+#include <libfdt_env.h>
+#include <sbi/sbi_scratch.h>
 
+#define CPU_N_PWRCTL_BASE(n) \
+    ((volatile uint64_t *) (uintptr_t) ((n) == 0 ? 0x35080000 : \
+										(n) == 1 ? 0x35380000 : \
+										(n) == 2 ? 0x35180000 : \
+										(n) == 3 ? 0x35480000 : 0x0))
+
+#define PWRCTL_PWRDOWN_REQ_BIT					0
+#define PWRCTL_CPU_ISO_EN_BIT					1
+#define PWRCTL_CPU_SW_RST_N_BIT                 2
+#define PWRCTL_PC_RESET_VECTOR_FLAG_BIT			31
+#define PWRCTL_PC_RESET_VECTOR_BIT				32
+
+#define CPU_N_PWRSTAT_BASE(n) \
+    ((volatile uint64_t *) (uintptr_t) ((n) == 0 ? 0x35000000 : \
+                                        (n) == 1 ? 0x35300000 : \
+                                        (n) == 2 ? 0x35100000 : \
+                                        (n) == 3 ? 0x35400000 : 0x0))
+#define PWRSTAT_CHI_SYSCOREQ                    0
+#define PWRSTAT_SYSCOACK                        1
+#define PWRSTAT_CPU_HALT_BIT                    2
+#define PWRSTAT_NO_OP                           3
+#define PWRSTAT_PWRDOWN_ACK_BIT                 4
+
+#define CSR_FLUSH_PWR                           0xBC1
+#define FLUSH_PWR_FLUSH_L2_EN                   0
+#define FLUSH_PWR_FLUSH_L2_DONE                 1
+
+#define CSR_COREPRFETCH                         0x5C1
+
+struct kmh_powerdown_ipi_info {
+    u32 hartid_powerdown;
+};
+
+static u32 kmh_cpu_ipi_event = SBI_IPI_EVENT_MAX;
+static unsigned long ipi_powerdown_offset;
+static uint64_t online_harts = 0;
 
 static int kmh_v2_extensions_init(const struct fdt_match *match,
-				     struct sbi_hart_features *hfeatures)
+                                    struct sbi_hart_features *hfeatures)
 {
-	return 0;
+    return 0;
 }
 
-static int kmh_v2_final_init(bool cold_boot,
-		const struct fdt_match *match)
+static void cpu_delaycycle(int cycle_count)
 {
-	return 0;
+    int i;
+
+    for (i = 0; i < cycle_count; i++)
+        __asm__ __volatile("nop");
+}
+
+static int set_hart_online(u32 hartid)
+{
+    if (hartid < 64) {
+        online_harts |= (1ULL << hartid);
+    } else {
+        sbi_printf("%s: Invalid error Hart %u >= 64\n", __func__, hartid);
+        return SBI_ERR_FAILED;
+    }
+
+    return 0;
+}
+
+static int set_hart_offline(u32 hartid)
+{
+    if (hartid < 64) {
+        online_harts &= ~(1ULL << hartid);
+    } else {
+        sbi_printf("%s: Invalid error Hart %u >= 64\n", __func__, hartid);
+        return SBI_ERR_FAILED;
+    }
+
+    return 0;
+}
+
+static int is_hart_online(u32 hartid)
+{
+    if (hartid >= 64)
+        return 0;
+    return (online_harts >> hartid) & 1ULL;
+}
+
+static u32 get_online_hartid(u32 hartid_powerdown)
+{
+    u32 i;
+
+    if (online_harts == 0)
+        return UINT32_MAX;
+
+    for (i = 0; i < 64; i++) {
+        if (is_hart_online(i) && (i != hartid_powerdown))
+            return i;
+    }
+    return UINT32_MAX;
+}
+
+static int kmh_cpu_hart_start(u32 hartid, ulong saddr)
+{
+    uint64_t value = 0;
+    int rc;
+
+    value = readq(CPU_N_PWRCTL_BASE(hartid));
+    value |=  BIT(PWRCTL_PWRDOWN_REQ_BIT);
+    writeq(value, CPU_N_PWRCTL_BASE(hartid));
+
+    /* wait for power up ack */
+    do {
+        value = readq(CPU_N_PWRSTAT_BASE(hartid));
+    } while((value & BIT(PWRSTAT_PWRDOWN_ACK_BIT)) == 0);
+
+    /* set cpu_iso_en bit */
+    value = readq(CPU_N_PWRCTL_BASE(hartid));
+    value  &= ~BIT(1);
+    writeq(value, CPU_N_PWRCTL_BASE(hartid));
+
+    cpu_delaycycle(1000);
+    /* set cpu_sw_rst_n bit */
+    value = readq(CPU_N_PWRCTL_BASE(hartid));
+    value |= BIT(PWRSTAT_CPU_HALT_BIT);
+    writeq(value, CPU_N_PWRCTL_BASE(hartid));
+
+    sbi_timer_udelay(10);
+    do {
+        value = readq(CPU_N_PWRSTAT_BASE(hartid));
+    } while((value & BIT(PWRSTAT_CPU_HALT_BIT)) == 0);
+
+    rc = set_hart_online(hartid);
+    if (rc) {
+        sbi_printf("%s: set_hart_online failed\n", __func__);
+        return rc;
+    }
+
+    return 0;
+}
+
+static void core_savewarmboot_addr(void)
+{
+    u32 hart_id = current_hartid();
+    uint64_t value = 0;
+    unsigned long  entry = sbi_scratch_thishart_ptr()->warmboot_addr;
+
+    value = readq(CPU_N_PWRCTL_BASE(hart_id));
+    value |= BIT(PWRCTL_PC_RESET_VECTOR_FLAG_BIT);
+    value &= 0xFFFFFFFF;
+    value |= entry << PWRCTL_PC_RESET_VECTOR_BIT;
+    writeq(value, CPU_N_PWRCTL_BASE(hart_id));
+}
+
+static void pre_powerdown(void)
+{
+    csr_write(CSR_SIE, 0x0);
+    csr_write(CSR_SIP, 0x0);
+    csr_write(CSR_MIE, 0x0);
+    csr_write(CSR_MIP, 0x0);
+    csr_write(CSR_COREPRFETCH, 0x0);
+}
+
+static void core_cache_ctrl(void)
+{
+    uint64_t value = 0;
+
+    smp_mb();
+
+    csr_set(CSR_FLUSH_PWR, BIT(0));
+    value = csr_read(CSR_FLUSH_PWR);
+    while((value & BIT(FLUSH_PWR_FLUSH_L2_DONE)) == 0) {
+        value = csr_read(CSR_FLUSH_PWR);
+    }
+}
+
+static int kmh_cpu_hart_stop(void)
+{
+    int rc;
+    u32 hartid_control;
+    u32 hartid_powerdown = current_hartid();
+
+    core_savewarmboot_addr();
+    pre_powerdown();
+    smp_mb();
+
+    hartid_control = get_online_hartid(hartid_powerdown);
+    if (hartid_control == UINT32_MAX) {
+        sbi_printf("%s: get_boot_hartid failed\n", __func__);
+        return SBI_ERR_FAILED;
+    }
+
+    hartid_powerdown = current_hartid();
+    set_hart_offline(hartid_powerdown);
+    rc = sbi_ipi_send_many(1, hartid_control, kmh_cpu_ipi_event, &hartid_powerdown);
+    if (rc)
+        sbi_printf("%s: sbi_ipi_raw_send failed\n", __func__);
+    core_cache_ctrl();
+    wfi();
+
+    sbi_printf("%s: kmh_cpu_hart_stop failed at WFI\n", __func__);
+
+    return 0;
+}
+
+static const struct sbi_hsm_device kmh_cpu = {
+    .name	      = "bosc_cpu",
+    .hart_start   = kmh_cpu_hart_start,
+    .hart_stop    = kmh_cpu_hart_stop,
+};
+
+static int pwrctl_ipi_update(struct sbi_scratch *scratch,
+                                struct sbi_scratch *remote_scratch,
+                                u32 remote_hartindex, void *data)
+{
+    struct kmh_powerdown_ipi_info *ipi_info;
+    u32 hartid_powerdown = *(u32*)data;
+
+    ipi_info = sbi_scratch_offset_ptr(remote_scratch, ipi_powerdown_offset);
+    ipi_info->hartid_powerdown = hartid_powerdown;
+
+    return SBI_IPI_UPDATE_SUCCESS;
+}
+
+static void pwrctl_ipi_process(struct sbi_scratch *scratch)
+{
+    uint64_t value = 0;
+    struct kmh_powerdown_ipi_info *ipi_info;
+    u32 hartid_powerdown;
+
+    ipi_info = sbi_scratch_offset_ptr(scratch, ipi_powerdown_offset);;
+    hartid_powerdown = ipi_info->hartid_powerdown;
+
+    do {
+        value = readq(CPU_N_PWRSTAT_BASE(hartid_powerdown));
+    } while((value & BIT(2)) == 0);
+
+    do {
+        value = readq(CPU_N_PWRSTAT_BASE(hartid_powerdown));
+    } while((value & 0x03) == 0x3);
+
+    do {
+        value = readq(CPU_N_PWRSTAT_BASE(hartid_powerdown));
+    } while((value & BIT(PWRSTAT_NO_OP)) != BIT(PWRSTAT_NO_OP));
+
+    value = readq(CPU_N_PWRCTL_BASE(hartid_powerdown));
+    value &= ~BIT(PWRCTL_CPU_SW_RST_N_BIT);
+    writeq(value, CPU_N_PWRCTL_BASE(hartid_powerdown));
+
+    cpu_delaycycle(1000);
+    value = readq(CPU_N_PWRCTL_BASE(hartid_powerdown));
+    value |= BIT(PWRCTL_CPU_ISO_EN_BIT);
+    writeq(value, CPU_N_PWRCTL_BASE(hartid_powerdown));
+
+    cpu_delaycycle(2000);
+    value = readq(CPU_N_PWRCTL_BASE(hartid_powerdown));
+    value &= ~BIT(PWRCTL_PWRDOWN_REQ_BIT);
+    writeq(value, CPU_N_PWRCTL_BASE(hartid_powerdown));
+
+    do {
+        value = readq(CPU_N_PWRSTAT_BASE(hartid_powerdown));
+    } while((value & BIT(PWRSTAT_PWRDOWN_ACK_BIT)) != 0);
+}
+
+static struct sbi_ipi_event_ops kmh_ipi_process_ops = {
+    .name	 = "IPI_PWRCTL_INJECT",
+    .update  = pwrctl_ipi_update,
+    .process = pwrctl_ipi_process,
+};
+
+static int kmh_v2_final_init(bool cold_boot,
+                                const struct fdt_match *match)
+{
+    int rc = 0;
+    u32 hartid = 0;
+    struct kmh_powerdown_ipi_info *ipi_info;
+
+    if (cold_boot) {
+        sbi_hsm_set_device(&kmh_cpu);
+    }
+
+    if (kmh_cpu_ipi_event == SBI_IPI_EVENT_MAX) {
+        ipi_powerdown_offset = sbi_scratch_alloc_offset(sizeof(*ipi_info));
+        if (!ipi_powerdown_offset) {
+            sbi_printf("%s: sbi_scratch_alloc_offset failed\n", __func__);
+            return SBI_ENOMEM;
+        }
+        rc = sbi_ipi_event_create(&kmh_ipi_process_ops);
+        if (rc < 0) {
+            sbi_printf("%s: sbi_ipi_event_create failed\n", __func__);
+            return rc;
+        }
+        kmh_cpu_ipi_event = rc;
+    }
+
+    hartid = current_hartid();
+    rc = set_hart_online(hartid);
+    if (rc) {
+        sbi_printf("%s: set_hart_online failed\n", __func__);
+        return rc;
+    }
+
+    return 0;
 }
 
 
 static const struct fdt_match kmh_v2_match[] = {
-	{ .compatible = "bosc,kmh-v2-dev" },
-	{ },
+    { .compatible = "bosc,kmh-v2-dev" },
+    { },
 };
 
 static int kmh_v2_pmu_init(const struct fdt_match *match)
 {
-	return 0;
+    return 0;
 }
 
-
 const struct platform_override kmh_v2 = {
-	.match_table	= kmh_v2_match,
-	.final_init = kmh_v2_final_init,
-	.extensions_init = kmh_v2_extensions_init,
-	.pmu_init = kmh_v2_pmu_init,
+    .match_table	= kmh_v2_match,
+    .final_init = kmh_v2_final_init,
+    .extensions_init = kmh_v2_extensions_init,
+    .pmu_init = kmh_v2_pmu_init,
 };
