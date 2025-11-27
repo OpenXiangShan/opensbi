@@ -58,6 +58,8 @@
 
 #define CSR_COREPRFETCH                         0x5C1
 
+#define FPGA_HASH_ERROR_MASK                    0xfffffffff
+
 struct kmh_powerdown_ipi_info {
     u32 hartid_powerdown;
 };
@@ -65,6 +67,8 @@ struct kmh_powerdown_ipi_info {
 static u32 kmh_cpu_ipi_event = SBI_IPI_EVENT_MAX;
 static unsigned long ipi_powerdown_offset;
 static uint64_t online_harts = 0;
+static uint64_t hash = 0;
+static uint64_t time = 0;
 
 static int kmh_v2_extensions_init(const struct fdt_match *match,
                                     struct sbi_hart_features *hfeatures)
@@ -328,13 +332,62 @@ bool dtb_has_hcontext_property()
     return false;
 }
 
+void check_fpga_version(void)
+{
+    uint64_t tmp = 0;
+    uint64_t value = 0;
+    uint64_t mepc = 0;
+    //register int ret asm ("a0") = SYSERRNO;
+
+    value = csr_read(CSR_MSTATUS);
+    csr_clear(CSR_MSTATUS, MSTATUS_MIE);
+
+    asm volatile (
+        "   .align 4\n"
+        "   .option push\n"
+        "   .option norvc\n"
+
+        "   j check_fpga_version_next\n"
+        "   .align 4\n"
+        "check_fpga_vector:\n"
+        "   csrr %[mepc], mepc\n"
+        "   addi %[mepc], %[mepc], 4\n"
+        "   csrw mepc, %[mepc]\n"
+        "   li %[hash], 0xffffffff\n"
+        "   mret\n"
+        "check_fpga_version_next:\n"
+
+        "   la %[tmp], check_fpga_vector\n"
+        "   csrrw %[tmp], mtvec, %[tmp]\n"
+        "   .align 4\n"
+        "   li %[hash], 0x31200004\n"
+        "   lw %[hash], (%[hash])\n"
+        "   li %[time], 0x31200008\n"
+        "   lw %[time], (%[time])\n"
+        "   csrw mtvec, %[tmp]\n"
+
+        "   .option pop\n"
+        : [tmp] "+r" (tmp), [mepc] "+r" (mepc),
+        [hash] "+r" (hash) , [time] "+r" (time)
+        : : "memory");
+
+    csr_write(CSR_MSTATUS, value);
+
+    if (hash != (uint64_t)FPGA_HASH_ERROR_MASK) {
+        hash &= FPGA_HASH_ERROR_MASK;
+        time &= FPGA_HASH_ERROR_MASK;
+    }
+}
+
 static int kmh_v2_early_init(bool cold_boot,
                 const struct fdt_match *match)
 {
-         if(dtb_has_hcontext_property())
-                 csr_write(CSR_HCONTEXT, 0x00);
+    if(dtb_has_hcontext_property())
+            csr_write(CSR_HCONTEXT, 0x00);
 
-        return 0;
+    check_fpga_version();
+
+    return 0;
 }
 
 static int kmh_v2_final_init(bool cold_boot,
@@ -350,6 +403,9 @@ static int kmh_v2_final_init(bool cold_boot,
          sbi_printf("%s:  MSTATEEN0=0x%lx \n", __func__, csr_read(CSR_MSTATEEN0));
          sbi_printf("%s:  CSR_HCONTEXT=0x%lx \n", __func__, csr_read(CSR_HCONTEXT));
      }
+
+    if (hash != (uint64_t)FPGA_HASH_ERROR_MASK)
+        sbi_printf("fpga hash=0x%lx, time=0x%lx\n", hash, time);
 
     if (cold_boot) {
         sbi_hsm_set_device(&kmh_cpu);
