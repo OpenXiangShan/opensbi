@@ -28,6 +28,7 @@
 #include <libfdt.h>
 #include <sbi_utils/fdt/fdt_helper.h>
 #include <sbi_utils/fdt/fdt_fixup.h>
+#include "kmh_container.h"
 
 #define CPU_N_PWRCTL_BASE(n) \
     ((volatile uint64_t *) (uintptr_t) ((n) == 0 ? 0x35080000 : \
@@ -410,6 +411,11 @@ static int kmh_v2_final_init(bool cold_boot,
     if (cold_boot) {
         sbi_hsm_set_device(&kmh_cpu);
     }
+    
+#ifdef CONFIG_SBI_CONTAINER
+    if (sbi_container_init() != SBI_SUCCESS)
+        sbi_hart_hang();  // 初始化失败则挂起
+#endif
 
     if (kmh_cpu_ipi_event == SBI_IPI_EVENT_MAX) {
         ipi_powerdown_offset = sbi_scratch_alloc_offset(sizeof(*ipi_info));
