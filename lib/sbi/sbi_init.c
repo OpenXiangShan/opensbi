@@ -425,7 +425,7 @@ static void __noreturn init_coldboot(struct sbi_scratch *scratch, u32 hartid)
 
 	sbi_printf("\nARGS for TYCHE_SM: hartid: %d , arg1: %lx, next_addr: %lx, next_mode: %ld \n", hartid, scratch->next_arg1, scratch->next_addr, scratch->next_mode);
 
-	//void* tyche_start = (void*)tlr->tyche_entry;
+	void* tyche_start = (void*)tlr->tyche_entry;
 
     struct tyche_manifest* manifest = (struct tyche_manifest*) TYCHE_MANIFEST_ADDRESS; 
 
@@ -495,9 +495,9 @@ static void __noreturn init_coldboot(struct sbi_scratch *scratch, u32 hartid)
 
 	sbi_printf("\nArgs to Anchor: tyche_start_addr: %x, region_size: %lx, entry_addr: %lx, hartid: %x, manifest_addr: %p", TYCHE_LOAD_ADDRESS, manifest->next_addr - TYCHE_LOAD_ADDRESS - 1, tlr->tyche_entry, hartid, manifest);
 
-	enter_anchor((unsigned long)TYCHE_LOAD_ADDRESS, manifest->next_addr - TYCHE_LOAD_ADDRESS - 1, tlr->tyche_entry, hartid, manifest);
+	// enter_anchor((unsigned long)TYCHE_LOAD_ADDRESS, manifest->next_addr - TYCHE_LOAD_ADDRESS - 1, tlr->tyche_entry, hartid, manifest);
 
-	// ((void (*) (unsigned long, struct tyche_manifest*))tyche_start)(hartid, manifest);
+	((void (*) (unsigned long, struct tyche_manifest*))tyche_start)(hartid, manifest);
 
 #else 
 	sbi_hart_switch_mode(hartid, scratch->next_arg1, scratch->next_addr, scratch->next_mode, FALSE);
@@ -601,15 +601,15 @@ static void __noreturn init_warmboot(struct sbi_scratch *scratch, u32 hartid)
 		init_warm_startup(scratch, hartid);
 
 #ifdef LAUNCH_TYCHE
-    //void* tyche_start = (void*)scratch->next_addr;
+    void* tyche_start = (void*)scratch->next_addr;
     
     //sbi_timer_event_start(100000);
     //In the following - manifest_addr is not really needed - Tyche won't do anything with it 
-    //((void (*) (unsigned long, struct tyche_manifest*))tyche_start)(hartid,(struct tyche_manifest*)TYCHE_MANIFEST_ADDRESS);
+    ((void (*) (unsigned long, struct tyche_manifest*))tyche_start)(hartid,(struct tyche_manifest*)TYCHE_MANIFEST_ADDRESS);
 	
-	struct tyche_manifest* manifest = (struct tyche_manifest*) TYCHE_MANIFEST_ADDRESS; 
+	// struct tyche_manifest* manifest = (struct tyche_manifest*) TYCHE_MANIFEST_ADDRESS; 
 
-	enter_anchor((unsigned long)TYCHE_LOAD_ADDRESS, manifest->next_addr - TYCHE_LOAD_ADDRESS - 1, scratch->next_addr, hartid, (struct tyche_manifest*)TYCHE_MANIFEST_ADDRESS);
+	// enter_anchor((unsigned long)TYCHE_LOAD_ADDRESS, manifest->next_addr - TYCHE_LOAD_ADDRESS - 1, scratch->next_addr, hartid, (struct tyche_manifest*)TYCHE_MANIFEST_ADDRESS);
 #else
 	sbi_hart_switch_mode(hartid, scratch->next_arg1,
 			     scratch->next_addr,

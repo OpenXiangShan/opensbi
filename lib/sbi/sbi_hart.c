@@ -32,7 +32,7 @@ static unsigned long hart_features_offset;
 
 static void mstatus_init(struct sbi_scratch *scratch)
 {
-	unsigned long menvcfg_val, mstatus_val = 0;
+	unsigned long mstatus_val = 0;
 	int cidx;
 	unsigned int num_mhpm = sbi_hart_mhpm_count(scratch);
 	uint64_t mhpmevent_init_val = 0;
@@ -102,62 +102,8 @@ static void mstatus_init(struct sbi_scratch *scratch)
 		csr_write(CSR_MSTATEEN0H, mstateen_val >> 32);
 #endif
 	}
-
-	if (sbi_hart_priv_version(scratch) >= SBI_HART_PRIV_VER_1_12) {
-		menvcfg_val = csr_read(CSR_MENVCFG);
-
-		/*
-		 * Set menvcfg.CBZE == 1
-		 *
-		 * If Zicboz extension is not available then writes to
-		 * menvcfg.CBZE will be ignored because it is a WARL field.
-		 */
-		menvcfg_val |= ENVCFG_CBZE;
-
-		/*
-		 * Set menvcfg.CBCFE == 1
-		 *
-		 * If Zicbom extension is not available then writes to
-		 * menvcfg.CBCFE will be ignored because it is a WARL field.
-		 */
-		menvcfg_val |= ENVCFG_CBCFE;
-
-		/*
-		 * Set menvcfg.CBIE == 3
-		 *
-		 * If Zicbom extension is not available then writes to
-		 * menvcfg.CBIE will be ignored because it is a WARL field.
-		 */
-		menvcfg_val |= ENVCFG_CBIE_INV << ENVCFG_CBIE_SHIFT;
-
-		/*
-		 * Set menvcfg.PBMTE == 1 for RV64 or RV128
-		 *
-		 * If Svpbmt extension is not available then menvcfg.PBMTE
-		 * will be read-only zero.
-		 */
-#if __riscv_xlen > 32
-		menvcfg_val |= ENVCFG_PBMTE;
-#endif
-
-		/*
-		 * The spec doesn't explicitly describe the reset value of menvcfg.
-		 * Enable access to stimecmp if sstc extension is present in the
-		 * hardware.
-		 */
-		if (sbi_hart_has_extension(scratch, SBI_HART_EXT_SSTC)) {
-#if __riscv_xlen == 32
-			unsigned long menvcfgh_val;
-			menvcfgh_val = csr_read(CSR_MENVCFGH);
-			menvcfgh_val |= ENVCFGH_STCE;
-			csr_write(CSR_MENVCFGH, menvcfgh_val);
-#else
-			menvcfg_val |= ENVCFG_STCE;
-#endif
-		}
-
-		csr_write(CSR_MENVCFG, menvcfg_val);
-	}
+	
+	
 
 	/* Disable all interrupts */
 	csr_write(CSR_MIE, 0);
@@ -629,10 +575,12 @@ __mhpm_skip:
 		hfeatures->priv_version = SBI_HART_PRIV_VER_1_11;
 
 	/* Detect if hart supports Priv v1.12 */
-	csr_read_allowed(CSR_MENVCFG, (unsigned long)&trap);
-	if (!trap.cause &&
-	    (hfeatures->priv_version >= SBI_HART_PRIV_VER_1_11))
-		hfeatures->priv_version = SBI_HART_PRIV_VER_1_12;
+
+	//csr_read_allowed(CSR_MENVCFG, (unsigned long)&trap);
+	//if (!trap.cause &&
+	//    )
+	if ((hfeatures->priv_version >= SBI_HART_PRIV_VER_1_11))
+		hfeatures->priv_version = SBI_HART_PRIV_VER_1_11;
 
 	/* Counter overflow/filtering is not useful without mcounter/inhibit */
 	if (hfeatures->priv_version >= SBI_HART_PRIV_VER_1_12) {

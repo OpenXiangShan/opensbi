@@ -22,7 +22,7 @@ platform-objs-y += platform.o
 platform-objs-y += platform_override_modules.o
 
 # Blobs to build
-FW_TEXT_START=0x80200000
+FW_TEXT_START=0x80000000
 FW_DYNAMIC=y
 FW_JUMP=y
 ifeq ($(PLATFORM_RISCV_XLEN), 32)
@@ -39,6 +39,6 @@ ifeq ($(PLATFORM_RISCV_XLEN), 32)
   FW_PAYLOAD_OFFSET=0x400000
 else
   # This needs to be 2MB aligned for 64-bit system
-  FW_PAYLOAD_OFFSET=0x600000 	# Neelu: Moved it to 6 MB boundary for xlen 64 instead of 2 MB
+  FW_PAYLOAD_OFFSET=0x800000 	# Neelu: Moved it to 6 MB boundary for xlen 64 instead of 2 MB
 endif
 FW_PAYLOAD_FDT_ADDR=$(FW_JUMP_FDT_ADDR)
