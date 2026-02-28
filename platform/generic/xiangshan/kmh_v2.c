@@ -30,6 +30,7 @@
 #include <sbi_utils/fdt/fdt_fixup.h>
 #include <sbi/sbi_csr_detect.h>
 #include "kmh_container.h"
+#include "parse_dts.h"
 
 #define CPU_N_PWRCTL_BASE(n) \
     ((volatile uint64_t *) (uintptr_t) ((n) == 0 ? 0x35080000 : \
@@ -404,9 +405,20 @@ void check_fpga_version(void)
 
 #define BEU_LOCAL_INTR    0x38010028UL
 void _kmh_v2_nmi_handler(void);
+
+static bool has_check_trigger = 0;
+static void copy_config_base_to_sram(void)
+{
+    char *config_base = (char *)CONFIG_TEXT_ADDR;
+    char *sram_base = (char *)CONFIG_SRAM_ADDR;
+
+    sbi_memcpy(sram_base, config_base, MAX_CONFIG_SIZE);
+}
 static int kmh_v2_early_init(bool cold_boot,
                 const struct fdt_match *match)
 {
+
+
     if(dtb_has_hcontext_property())
             csr_write(CSR_HCONTEXT, 0x00);
 
@@ -429,6 +441,21 @@ static int kmh_v2_early_init(bool cold_boot,
 
     check_fpga_version();
 
+    struct platform_config cfg;
+    int err;
+    void *fdt = (void *)FDT_ADDR;
+
+    if (!has_check_trigger) {
+        has_check_trigger = 1;
+        parse_platform_config_from_mem(&cfg);
+    
+        copy_config_base_to_sram();
+
+        err = fdt_check_header(fdt);
+        if (!err)
+            fdt_modify(fdt, &cfg);
+    }
+
     return 0;
 }
 
@@ -438,8 +465,15 @@ static int kmh_v2_final_init(bool cold_boot,
     int rc = 0;
     u32 hartid = 0;
     struct kmh_powerdown_ipi_info *ipi_info;
+    static bool has_print = 0;
 
-     if(dtb_has_hcontext_property())
+    if (!has_print) {
+        has_print = 1;
+        print_string_at_addr(CONFIG_TEXT_ADDR);
+    }
+    //print_full_fdt();
+
+    if(dtb_has_hcontext_property())
      {
         /* as the debug info reserved.*/
          sbi_printf("%s:  MSTATEEN0=0x%lx \n", __func__, csr_read(CSR_MSTATEEN0));
