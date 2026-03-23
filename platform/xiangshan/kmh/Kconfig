@@ -5,5 +5,6 @@ config PLATFORM_KMH
 	select FDT
 	select IPI_MSWI
 	select SERIAL_UART8250
+	select SERIAL_VIRTIO_CONSOLE
 	select TIMER_MTIMER
 	default y

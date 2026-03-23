@@ -54,6 +54,11 @@ config FDT_SERIAL_XILINX_UARTLITE
 	select SERIAL_XILINX_UARTLITE
 	default n
 
+config FDT_SERIAL_VIRTIO_CONSOLE
+	bool "Virtio Console FDT driver"
+	select SERIAL_VIRTIO_CONSOLE
+	default n
+
 endif
 
 config SERIAL_CADENCE
@@ -90,6 +95,11 @@ config SERIAL_XILINX_UARTLITE
 
 config SERIAL_SEMIHOSTING
 	bool "Semihosting support"
+	default n
+
+config SERIAL_VIRTIO_CONSOLE
+	bool "Virtio console support"
+	select VIRTIO
 	default n
 
 endmenu
