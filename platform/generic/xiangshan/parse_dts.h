@@ -1,7 +1,11 @@
 #ifndef __PARSE_DTS_H__
 #define __PARSE_DTS_H__
 
-#define CONFIG_TEXT_ADDR    0x400000000ULL
+#ifndef FW_CONFIG_TEXT_ADDR
+#define FW_CONFIG_TEXT_ADDR 0x90000000ULL
+#endif
+
+#define CONFIG_TEXT_ADDR    FW_CONFIG_TEXT_ADDR
 #define CONFIG_SRAM_ADDR    0x37f00000ULL
 #define MAX_LINE_LEN        1024
 #define MAX_CONFIG_SIZE     4096
@@ -20,6 +24,10 @@ struct mem_config {
     unsigned long size;
 };
 
+struct task_config {
+    unsigned long start_addr;
+};
+
 #define MAX_UART_COMPAT_LEN 64
 
 struct uart_config {
@@ -30,9 +38,11 @@ struct platform_config {
     struct mem_config mem;
     struct uart_config uart;
     struct cmd_config cmd;
+    struct task_config task;
     bool mem_valid;
     bool uart_valid;
     bool cmd_valid;
+    bool task_valid;
 };
 
 
@@ -41,4 +51,3 @@ extern void fdt_modify(void *fdt, struct platform_config *cfg);
 extern void print_string_at_addr(unsigned long addr);
 extern void print_full_fdt(void);
 #endif
-

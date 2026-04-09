@@ -10,7 +10,8 @@ enum parse_state {
     PARSE_STATE_NONE,
     PARSE_STATE_MEM,
     PARSE_STATE_UART,
-    PARSE_STATE_CMD
+    PARSE_STATE_CMD,
+    PARSE_STATE_TASK
 };
 
 /* Manually implement isspace (only handles spaces and tabs) */
@@ -186,6 +187,7 @@ int parse_platform_config_from_mem(struct platform_config *cfg)
     char line[MAX_LINE_LEN];
     u32 offset = 0;
     u32 line_pos = 0;
+    u32 line_start_offset = 0;
 
     sbi_memset(cfg, 0, sizeof(*cfg));
 
@@ -212,20 +214,27 @@ int parse_platform_config_from_mem(struct platform_config *cfg)
                 } else if (sbi_strcmp(line, "[uart_end]") == 0) {
                     state = PARSE_STATE_NONE;
                     cfg->uart_valid = true;
-                }  if (sbi_strcmp(line, "[cmd]") == 0) {
+                } else if (sbi_strcmp(line, "[cmd]") == 0) {
                     state = PARSE_STATE_CMD;
                 } else if (sbi_strcmp(line, "[cmd_end]") == 0) {
                     state = PARSE_STATE_NONE;
                     cfg->cmd_valid = true;
+                } else if (sbi_strcmp(line, "[task]") == 0) {
+                    state = PARSE_STATE_TASK;
+                    cfg->task.start_addr = CONFIG_SRAM_ADDR + line_start_offset;
+                    cfg->task_valid = true;
+                } else if (sbi_strcmp(line, "[task_end]") == 0) {
+                    state = PARSE_STATE_NONE;
                 } else {
                     /* key: value */
-                    if (state != PARSE_STATE_NONE) {
+                    if (state != PARSE_STATE_NONE && state != PARSE_STATE_TASK) {
                         parse_line_by_state(state, line, cfg);
                     }
                 }
             }
 
             line_pos = 0;
+            line_start_offset = offset;
             continue;
         }
 
@@ -239,7 +248,8 @@ int parse_platform_config_from_mem(struct platform_config *cfg)
     if (line_pos > 0) {
         line[line_pos] = '\0';
         trim_line(line);
-        if (line[0] != '\0' && line[0] != '#' && state != PARSE_STATE_NONE) {
+        if (line[0] != '\0' && line[0] != '#' &&
+            state != PARSE_STATE_NONE && state != PARSE_STATE_TASK) {
             parse_line_by_state(state, line, cfg);
         }
     }
@@ -416,23 +426,30 @@ static char *my_strstr(const char *haystack, const char *needle)
     }
     return NULL;
 }
-static int replace_bootarg(void *fdt, struct cmd_config *cmd)
+
+static int replace_bootarg_with_addr(void *fdt, const char *base_args,
+                                     unsigned long start_addr)
 {
     const char *key = "aabbcc";
     char new_value[32];
 
-    if (!fdt || !cmd)
+    if (!fdt)
         return -1;
 
     int chosen = fdt_path_offset(fdt, "/chosen");
     if (chosen < 0)
         return chosen;
 
-    if (!cmd->start_addr)
-        return fdt_setprop_string(fdt, chosen, "bootargs", cmd->bootargs);
+    if (!start_addr) {
+        if (!base_args)
+            return 0;
+        return fdt_setprop_string(fdt, chosen, "bootargs", base_args);
+    }
 
-    sbi_snprintf(new_value, sizeof(new_value), "0x%lx", cmd->start_addr);
-    const char *old_args = fdt_getprop(fdt, chosen, "bootargs", NULL);
+    sbi_snprintf(new_value, sizeof(new_value), "0x%lx", start_addr);
+    const char *old_args = base_args;
+    if (!old_args)
+        old_args = fdt_getprop(fdt, chosen, "bootargs", NULL);
     if (!old_args)
         old_args = "";
 
@@ -496,12 +513,20 @@ static int replace_bootarg(void *fdt, struct cmd_config *cmd)
     return fdt_setprop_string(fdt, chosen, "bootargs", new_args);
 }
 
-static int patch_bootargs_node(void *fdt, struct cmd_config *cmd)
+static int patch_bootargs_and_task_node(void *fdt, struct platform_config *cfg)
 {
-    if (!fdt || !cmd)
+    unsigned long start_addr;
+    const char *base_args;
+
+    if (!fdt || !cfg)
         return SBI_EINVAL;
 
-    replace_bootarg(fdt, cmd);
+    base_args = cfg->cmd.bootargs[0] ? cfg->cmd.bootargs : NULL;
+    start_addr = cfg->cmd.start_addr;
+    if (!start_addr && cfg->task_valid)
+        start_addr = cfg->task.start_addr;
+
+    replace_bootarg_with_addr(fdt, base_args, start_addr);
 
     return 0;
 }
@@ -521,7 +546,7 @@ void fdt_modify(void *fdt, struct platform_config *cfg)
         }
 
         if (cfg->cmd_valid) {
-            patch_bootargs_node(fdt, &cfg->cmd);
+            patch_bootargs_and_task_node(fdt, cfg);
         }
         done = 1;
     }

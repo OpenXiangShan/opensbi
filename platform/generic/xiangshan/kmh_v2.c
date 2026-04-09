@@ -409,7 +409,7 @@ void _kmh_v2_nmi_handler(void);
 static bool has_check_trigger = 0;
 static void copy_config_base_to_sram(void)
 {
-    char *config_base = (char *)CONFIG_TEXT_ADDR;
+    char *config_base = (char *)FW_CONFIG_TEXT_ADDR;
     char *sram_base = (char *)CONFIG_SRAM_ADDR;
 
     sbi_memcpy(sram_base, config_base, MAX_CONFIG_SIZE);
@@ -469,7 +469,7 @@ static int kmh_v2_final_init(bool cold_boot,
 
     if (!has_print) {
         has_print = 1;
-        print_string_at_addr(CONFIG_TEXT_ADDR);
+        print_string_at_addr(FW_CONFIG_TEXT_ADDR);
     }
     //print_full_fdt();
 
