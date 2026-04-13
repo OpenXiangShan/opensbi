@@ -430,7 +430,7 @@ static char *my_strstr(const char *haystack, const char *needle)
 static int replace_bootarg_with_addr(void *fdt, const char *base_args,
                                      unsigned long start_addr)
 {
-    const char *key = "aabbcc";
+    const char *key = "task";
     char new_value[32];
 
     if (!fdt)
