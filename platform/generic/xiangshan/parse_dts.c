@@ -11,13 +11,28 @@ enum parse_state {
     PARSE_STATE_MEM,
     PARSE_STATE_UART,
     PARSE_STATE_CMD,
-    PARSE_STATE_TASK
+    PARSE_STATE_TASK,
+    PARSE_STATE_TASK_GUEST
 };
 
 /* Manually implement isspace (only handles spaces and tabs) */
 static inline bool is_space(char c)
 {
     return (c == ' ' || c == '\t' || c == '\r');
+}
+
+static bool is_section_start(const char *line, const char *name_a, const char *name_b)
+{
+    if (!line)
+        return false;
+
+    if (name_a && sbi_strcmp(line, name_a) == 0)
+        return true;
+
+    if (name_b && sbi_strcmp(line, name_b) == 0)
+        return true;
+
+    return false;
 }
 
 /*  Trim leading and trailing whitespace from a string. */
@@ -177,6 +192,9 @@ static void parse_line_by_state(enum parse_state state,
         if (sbi_strcmp(key, "start_addr") == 0) {
             cfg->cmd.start_addr = num;
         }
+        if (sbi_strcmp(key, "guest_start_addr") == 0) {
+            cfg->cmd.guest_start_addr = num;
+        }
     }
 }
 
@@ -221,13 +239,24 @@ int parse_platform_config_from_mem(struct platform_config *cfg)
                     cfg->cmd_valid = true;
                 } else if (sbi_strcmp(line, "[task]") == 0) {
                     state = PARSE_STATE_TASK;
+                    cfg->task.offset = line_start_offset;
                     cfg->task.start_addr = CONFIG_SRAM_ADDR + line_start_offset;
                     cfg->task_valid = true;
                 } else if (sbi_strcmp(line, "[task_end]") == 0) {
                     state = PARSE_STATE_NONE;
+                } else if (is_section_start(line, "[task_guest]", "[guest_task]")) {
+                    state = PARSE_STATE_TASK_GUEST;
+                    cfg->task_guest.offset = line_start_offset;
+                    if (cfg->cmd.guest_start_addr)
+                        cfg->task_guest.start_addr = cfg->cmd.guest_start_addr + line_start_offset;
+                    cfg->task_guest_valid = true;
+                } else if (is_section_start(line, "[task_guest_end]", "[guest_task_end]")) {
+                    state = PARSE_STATE_NONE;
                 } else {
                     /* key: value */
-                    if (state != PARSE_STATE_NONE && state != PARSE_STATE_TASK) {
+                    if (state != PARSE_STATE_NONE &&
+                        state != PARSE_STATE_TASK &&
+                        state != PARSE_STATE_TASK_GUEST) {
                         parse_line_by_state(state, line, cfg);
                     }
                 }
@@ -249,10 +278,18 @@ int parse_platform_config_from_mem(struct platform_config *cfg)
         line[line_pos] = '\0';
         trim_line(line);
         if (line[0] != '\0' && line[0] != '#' &&
-            state != PARSE_STATE_NONE && state != PARSE_STATE_TASK) {
+            state != PARSE_STATE_NONE &&
+            state != PARSE_STATE_TASK &&
+            state != PARSE_STATE_TASK_GUEST) {
             parse_line_by_state(state, line, cfg);
         }
     }
+
+    if (cfg->task_valid && cfg->cmd.start_addr)
+        cfg->task.start_addr = cfg->cmd.start_addr + cfg->task.offset;
+
+    if (cfg->task_guest_valid && cfg->cmd.guest_start_addr)
+        cfg->task_guest.start_addr = cfg->cmd.guest_start_addr + cfg->task_guest.offset;
 
     return 0;
 }
@@ -529,6 +566,200 @@ static int patch_bootargs_and_task_node(void *fdt, struct platform_config *cfg)
     replace_bootarg_with_addr(fdt, base_args, start_addr);
 
     return 0;
+}
+
+static char *skip_inline_space(char *p)
+{
+    while (p && *p && is_space(*p))
+        p++;
+
+    return p;
+}
+
+static char *find_section_line(char *config_base, const char *section_name,
+                               const char *section_end_name,
+                               const char *line_prefix)
+{
+    char *section;
+    char *section_end;
+    char *line;
+    char *cursor;
+    u32 prefix_len;
+
+    if (!config_base || !section_name || !section_end_name || !line_prefix)
+        return NULL;
+
+    section = my_strstr(config_base, section_name);
+    if (!section)
+        return NULL;
+
+    section_end = my_strstr(section, section_end_name);
+    if (!section_end)
+        return NULL;
+
+    prefix_len = sbi_strlen(line_prefix);
+    line = section;
+    while (line && line < section_end) {
+        cursor = skip_inline_space(line);
+        if (cursor < section_end &&
+            sbi_strncmp(cursor, line_prefix, prefix_len) == 0) {
+            cursor += prefix_len;
+            cursor = skip_inline_space(cursor);
+            if (*cursor == '=')
+                return cursor + 1;
+        }
+
+        line = my_strstr(line + 1, "\n");
+        if (line)
+            line++;
+    }
+
+    return NULL;
+}
+
+static char *find_guest_qemu_cmd_line(char *config_base)
+{
+    char *line;
+
+    line = find_section_line(config_base, "[task_guest]",
+                             "[task_guest_end]", "CASE_QEMU_CMD");
+    if (line)
+        return line;
+
+    line = find_section_line(config_base, "[guest_task]",
+                             "[guest_task_end]", "CASE_QEMU_CMD");
+    if (line)
+        return line;
+
+    return find_section_line(config_base, "[task]", "[task_end]", "CASE_QEMU_CMD");
+}
+
+static unsigned long get_task_cmd_target_addr(struct platform_config *cfg)
+{
+    if (!cfg)
+        return 0;
+
+    if (cfg->cmd.guest_start_addr && cfg->task_guest_valid)
+        return cfg->cmd.guest_start_addr + cfg->task_guest.offset;
+
+    if (cfg->cmd.start_addr && cfg->task_valid)
+        return cfg->cmd.start_addr + cfg->task.offset;
+
+    if (cfg->task_valid)
+        return cfg->task.start_addr;
+
+    return 0;
+}
+
+static int replace_task_value_in_cmd_line(char *line, unsigned long start_addr,
+                                          char *config_limit, u32 *new_len)
+{
+    char *task_pos;
+    char *val_start;
+    char *val_end;
+    char *text_end;
+    char new_value[32];
+    u32 old_len;
+    u32 repl_len;
+    u32 tail_len;
+
+    if (!line || !config_limit)
+        return SBI_EINVAL;
+
+    task_pos = my_strstr(line, "task=");
+    if (!task_pos)
+        return SBI_ENOENT;
+
+    val_start = task_pos + sbi_strlen("task=");
+    val_end = val_start;
+    while (*val_end && *val_end != ' ' && *val_end != '\'' &&
+           *val_end != '"' && *val_end != '\n')
+        val_end++;
+
+    text_end = val_end;
+    while (text_end < config_limit && *text_end)
+        text_end++;
+    if (text_end >= config_limit)
+        return SBI_ENOSPC;
+
+    sbi_snprintf(new_value, sizeof(new_value), "0x%lx", start_addr);
+    old_len = val_end - val_start;
+    repl_len = sbi_strlen(new_value);
+    tail_len = (text_end - val_end) + 1;
+
+    if (val_start + repl_len + tail_len > config_limit)
+        return SBI_ENOSPC;
+
+    if (repl_len != old_len)
+        sbi_memmove(val_start + repl_len, val_end, tail_len);
+
+    sbi_memcpy(val_start, new_value, repl_len);
+    if (new_len)
+        *new_len = (val_start - line) + repl_len;
+
+    return 0;
+}
+
+static void patch_task_cmd_in_copy(char *copy_base, unsigned long task_addr,
+                                   bool prefer_guest_section)
+{
+    char *copy_end;
+    char *qemu_cmd_line;
+    int rc;
+
+    if (!copy_base || !task_addr)
+        return;
+
+    copy_end = copy_base + MAX_CONFIG_SIZE;
+    if (prefer_guest_section)
+        qemu_cmd_line = find_guest_qemu_cmd_line(copy_base);
+    else
+        qemu_cmd_line = find_section_line(copy_base, "[task]", "[task_end]",
+                                          "CASE_QEMU_CMD");
+
+    if (!qemu_cmd_line) {
+        if (prefer_guest_section)
+            sbi_printf("CFG: CASE_QEMU_CMD not found in guest copy config\n");
+        else
+            sbi_printf("CFG: CASE_QEMU_CMD not found in SRAM [task]\n");
+        return;
+    }
+
+    rc = replace_task_value_in_cmd_line(qemu_cmd_line, task_addr, copy_end, NULL);
+    if (rc) {
+        if (prefer_guest_section)
+            sbi_printf("CFG: failed to patch guest task address: %d\n", rc);
+        else
+            sbi_printf("CFG: failed to patch SRAM task address: %d\n", rc);
+    }
+}
+
+void patch_sram_task_copy(struct platform_config *cfg)
+{
+    unsigned long target_addr;
+    unsigned long copy_base;
+
+    if (!cfg)
+        return;
+
+    copy_base = cfg->cmd.start_addr ? cfg->cmd.start_addr : CONFIG_SRAM_ADDR;
+    target_addr = get_task_cmd_target_addr(cfg);
+    if (!target_addr)
+        return;
+
+    patch_task_cmd_in_copy((char *)copy_base, target_addr, false);
+}
+
+void patch_guest_task_copy(struct platform_config *cfg)
+{
+    unsigned long guest_task_addr;
+
+    if (!cfg || !cfg->cmd.guest_start_addr || !cfg->task_guest_valid)
+        return;
+
+    guest_task_addr = cfg->cmd.guest_start_addr + cfg->task_guest.offset;
+    cfg->task_guest.start_addr = guest_task_addr;
+    patch_task_cmd_in_copy((char *)cfg->cmd.guest_start_addr, guest_task_addr, true);
 }
 
 void fdt_modify(void *fdt, struct platform_config *cfg)

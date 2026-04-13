@@ -407,12 +407,40 @@ void check_fpga_version(void)
 void _kmh_v2_nmi_handler(void);
 
 static bool has_check_trigger = 0;
-static void copy_config_base_to_sram(void)
+static void copy_config_base(char *dst)
 {
     char *config_base = (char *)FW_CONFIG_TEXT_ADDR;
-    char *sram_base = (char *)CONFIG_SRAM_ADDR;
 
-    sbi_memcpy(sram_base, config_base, MAX_CONFIG_SIZE);
+    if (dst)
+        sbi_memcpy(dst, config_base, MAX_CONFIG_SIZE);
+}
+
+static void copy_config_base_to_start_addr(struct platform_config *cfg)
+{
+    char *dst;
+
+    if (!cfg)
+        return;
+
+    dst = (char *)(cfg->cmd.start_addr ? cfg->cmd.start_addr : CONFIG_SRAM_ADDR);
+    copy_config_base(dst);
+}
+
+static void patch_config_base_in_start_addr(struct platform_config *cfg)
+{
+    if (!cfg)
+        return;
+
+    patch_sram_task_copy(cfg);
+}
+
+static void copy_config_base_to_guest(struct platform_config *cfg)
+{
+    if (!cfg || !cfg->cmd.guest_start_addr)
+        return;
+
+    copy_config_base((char *)cfg->cmd.guest_start_addr);
+    patch_guest_task_copy(cfg);
 }
 static int kmh_v2_early_init(bool cold_boot,
                 const struct fdt_match *match)
@@ -449,7 +477,9 @@ static int kmh_v2_early_init(bool cold_boot,
         has_check_trigger = 1;
         parse_platform_config_from_mem(&cfg);
     
-        copy_config_base_to_sram();
+        copy_config_base_to_start_addr(&cfg);
+        patch_config_base_in_start_addr(&cfg);
+        copy_config_base_to_guest(&cfg);
 
         err = fdt_check_header(fdt);
         if (!err)
