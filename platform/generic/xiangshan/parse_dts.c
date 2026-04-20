@@ -557,21 +557,17 @@ static int patch_bootargs_and_task_node(void *fdt, struct platform_config *cfg)
 {
     unsigned long start_addr;
     const char *base_args;
-    bool append_if_missing;
 
     if (!fdt || !cfg)
         return SBI_EINVAL;
 
     base_args = cfg->cmd.bootargs[0] ? cfg->cmd.bootargs : NULL;
     start_addr = cfg->cmd.start_addr;
-    append_if_missing = true;
 
-    if (!start_addr && base_args && cfg->task_valid) {
+    if (!start_addr && base_args && cfg->task_valid)
         start_addr = CONFIG_TEXT_ADDR + cfg->task.offset;
-        append_if_missing = false;
-    }
 
-    replace_bootarg_with_addr(fdt, base_args, start_addr, append_if_missing);
+    replace_bootarg_with_addr(fdt, base_args, start_addr, true);
 
     return 0;
 }
