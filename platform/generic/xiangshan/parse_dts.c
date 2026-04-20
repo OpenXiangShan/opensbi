@@ -240,7 +240,6 @@ int parse_platform_config_from_mem(struct platform_config *cfg)
                 } else if (sbi_strcmp(line, "[task]") == 0) {
                     state = PARSE_STATE_TASK;
                     cfg->task.offset = line_start_offset;
-                    cfg->task.start_addr = CONFIG_SRAM_ADDR + line_start_offset;
                     cfg->task_valid = true;
                 } else if (sbi_strcmp(line, "[task_end]") == 0) {
                     state = PARSE_STATE_NONE;
@@ -465,7 +464,8 @@ static char *my_strstr(const char *haystack, const char *needle)
 }
 
 static int replace_bootarg_with_addr(void *fdt, const char *base_args,
-                                     unsigned long start_addr)
+                                     unsigned long start_addr,
+                                     bool append_if_missing)
 {
     const char *key = "task";
     char new_value[32];
@@ -534,6 +534,9 @@ static int replace_bootarg_with_addr(void *fdt, const char *base_args,
             sbi_strncpy(new_args + current_len, val_end, MAX_BOOTARGS_LEN - current_len - 1);
         }
     } else {
+        if (!append_if_missing)
+            return fdt_setprop_string(fdt, chosen, "bootargs", old_args);
+
         /* If not found, append to the end */
         u32 old_len = sbi_strlen(old_args);
         u32 needed = old_len + (old_len ? 1 : 0) + sbi_strlen(key_eq) + sbi_strlen(new_value);
@@ -554,16 +557,21 @@ static int patch_bootargs_and_task_node(void *fdt, struct platform_config *cfg)
 {
     unsigned long start_addr;
     const char *base_args;
+    bool append_if_missing;
 
     if (!fdt || !cfg)
         return SBI_EINVAL;
 
     base_args = cfg->cmd.bootargs[0] ? cfg->cmd.bootargs : NULL;
     start_addr = cfg->cmd.start_addr;
-    if (!start_addr && cfg->task_valid)
-        start_addr = cfg->task.start_addr;
+    append_if_missing = true;
 
-    replace_bootarg_with_addr(fdt, base_args, start_addr);
+    if (!start_addr && base_args && cfg->task_valid) {
+        start_addr = CONFIG_TEXT_ADDR + cfg->task.offset;
+        append_if_missing = false;
+    }
+
+    replace_bootarg_with_addr(fdt, base_args, start_addr, append_if_missing);
 
     return 0;
 }
@@ -644,9 +652,6 @@ static unsigned long get_task_cmd_target_addr(struct platform_config *cfg)
 
     if (cfg->cmd.start_addr && cfg->task_valid)
         return cfg->cmd.start_addr + cfg->task.offset;
-
-    if (cfg->task_valid)
-        return cfg->task.start_addr;
 
     return 0;
 }
@@ -737,17 +742,15 @@ static void patch_task_cmd_in_copy(char *copy_base, unsigned long task_addr,
 void patch_sram_task_copy(struct platform_config *cfg)
 {
     unsigned long target_addr;
-    unsigned long copy_base;
 
-    if (!cfg)
+    if (!cfg || !cfg->cmd.start_addr)
         return;
 
-    copy_base = cfg->cmd.start_addr ? cfg->cmd.start_addr : CONFIG_SRAM_ADDR;
     target_addr = get_task_cmd_target_addr(cfg);
     if (!target_addr)
         return;
 
-    patch_task_cmd_in_copy((char *)copy_base, target_addr, false);
+    patch_task_cmd_in_copy((char *)cfg->cmd.start_addr, target_addr, false);
 }
 
 void patch_guest_task_copy(struct platform_config *cfg)

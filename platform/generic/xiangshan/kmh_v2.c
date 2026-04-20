@@ -417,18 +417,15 @@ static void copy_config_base(char *dst)
 
 static void copy_config_base_to_start_addr(struct platform_config *cfg)
 {
-    char *dst;
-
-    if (!cfg)
+    if (!cfg || !cfg->cmd.start_addr)
         return;
 
-    dst = (char *)(cfg->cmd.start_addr ? cfg->cmd.start_addr : CONFIG_SRAM_ADDR);
-    copy_config_base(dst);
+    copy_config_base((char *)cfg->cmd.start_addr);
 }
 
 static void patch_config_base_in_start_addr(struct platform_config *cfg)
 {
-    if (!cfg)
+    if (!cfg || !cfg->cmd.start_addr)
         return;
 
     patch_sram_task_copy(cfg);
