@@ -1,0 +1,5 @@
+# SPDX-License-Identifier: BSD-2-Clause
+#
+config XIANGSHAN_KMHV2_ERRNMI
+	bool "xiangshan kmh_v2 nmi_handler support"
+	default n
