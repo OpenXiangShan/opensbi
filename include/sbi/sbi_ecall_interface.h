@@ -35,6 +35,7 @@
 #define SBI_EXT_DBTR				0x44425452
 #define SBI_EXT_SSE				0x535345
 #define SBI_EXT_FWFT				0x46574654
+#define SBI_EXT_XS_NMI_TEST 			0x0F000000
 
 /* SBI function IDs for BASE extension*/
 #define SBI_EXT_BASE_GET_SPEC_VERSION		0x0

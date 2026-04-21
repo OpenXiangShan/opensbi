@@ -84,8 +84,12 @@
 #define SBI_TRAP_REGS_mstatus			33
 /** Index of mstatusH member in sbi_trap_regs */
 #define SBI_TRAP_REGS_mstatusH			34
+/** Index of mnepc member in sbi_trap_regs */
+#define SBI_TRAP_REGS_mnepc				35
+/** Index of mnstatus member in sbi_trap_regs */
+#define SBI_TRAP_REGS_mnstatus			36
 /** Last member index in sbi_trap_regs */
-#define SBI_TRAP_REGS_last			35
+#define SBI_TRAP_REGS_last			37
 
 /** Index of cause member in sbi_trap_info */
 #define SBI_TRAP_INFO_cause			0
@@ -99,6 +103,8 @@
 #define SBI_TRAP_INFO_gva			4
 /** Last member index in sbi_trap_info */
 #define SBI_TRAP_INFO_last			5
+/** Index of mncause member in sbi_trap_info */
+#define SBI_TRAP_INFO_mncause		6
 
 /* clang-format on */
 
@@ -194,6 +200,10 @@ struct sbi_trap_regs {
 	unsigned long mstatus;
 	/** mstatusH register state (only for 32-bit) */
 	unsigned long mstatusH;
+	/** mnepc register state */
+	unsigned long mnepc;
+	/** mnstatus register state */
+	unsigned long mnstatus;
 };
 
 /** Representation of trap details */
@@ -208,6 +218,9 @@ struct sbi_trap_info {
 	unsigned long tinst;
 	/** gva Guest virtual address in tval flag */
 	unsigned long gva;
+	/** cause Trap exception mncause */
+	unsigned long mncause;
+	//unsigned long mnstatus;
 };
 
 /** Representation of trap context saved on stack */

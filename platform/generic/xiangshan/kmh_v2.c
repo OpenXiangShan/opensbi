@@ -61,6 +61,10 @@
 
 #define FPGA_HASH_ERROR_MASK                    0xfffffffff
 
+#define CAUSE_ICACHE_ECC_ERROR 1
+#define CAUSE_DCACHE_ECC_ERROR 2
+#define CAUSE_L2CACHE_ECC_ERROR 3
+
 struct kmh_powerdown_ipi_info {
     u32 hartid_powerdown;
 };
@@ -380,11 +384,16 @@ void check_fpga_version(void)
     }
 }
 
+#define BEU_LOCAL_INTR    0x38010028UL
+void _kmh_v2_nmi_handler(void);
 static int kmh_v2_early_init(bool cold_boot,
                 const struct fdt_match *match)
 {
     if(dtb_has_hcontext_property())
             csr_write(CSR_HCONTEXT, 0x00);
+		/*setup nmi handler*/
+	csr_write(CSR_MTVEC, &_kmh_v2_nmi_handler);
+	writeq(0,  (volatile uint64_t *)BEU_LOCAL_INTR);
 
     check_fpga_version();
 

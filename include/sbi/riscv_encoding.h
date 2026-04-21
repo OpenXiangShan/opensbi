@@ -23,6 +23,8 @@
 #define MSTATUS_SPP			(_UL(1) << MSTATUS_SPP_SHIFT)
 #define MSTATUS_MPP_SHIFT		11
 #define MSTATUS_MPP			(_UL(3) << MSTATUS_MPP_SHIFT)
+#define MNSTATUS_MPP_SHIFT		11
+#define MNSTATUS_MPP			(_UL(3) << MSTATUS_MPP_SHIFT)
 #define MSTATUS_FS			_UL(0x00006000)
 #define MSTATUS_XS			_UL(0x00018000)
 #define MSTATUS_VS			_UL(0x00000600)
@@ -206,6 +208,10 @@
 #define MHPMEVENT_VUINH			(MHPMEVENTH_VUINH << 32)
 
 #endif
+
+#define MNSTATUS_NMIE                  (_UL(0x8))
+#define MNSTATUS_MNPV                  (_UL(0x80))
+#define MNSTATUS_MNPP                  (_UL(0x1800))
 
 #define MHPMEVENT_SSCOF_MASK		_ULL(0xFF00000000000000)
 
@@ -739,6 +745,11 @@
 #define CSR_MSTATEEN2H			0x31E
 #define CSR_MSTATEEN3			0x30F
 #define CSR_MSTATEEN3H			0x31F
+
+#define CSR_MNSCRATCH                  0x740
+#define CSR_MNEPC                      0x741
+#define CSR_MNCAUSE                    0x742
+#define CSR_MNSTATUS                   0x744
 
 /* Machine-Level High-Half CSRs (AIA) */
 #define CSR_MIDELEGH			0x313

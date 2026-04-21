@@ -3,4 +3,5 @@
 #
 
 carray-platform_override_modules-$(CONFIG_PLATFORM_XIANGSHAN_KMH_V2) += kmh_v2
+platform-objs-$(CONFIG_XIANGSHAN_KMHV2_ERRNMI) += xiangshan/kmh_v2_nmi_handler.o   xiangshan/sbi_ecall_xs_nmi_test.o
 platform-objs-$(CONFIG_PLATFORM_XIANGSHAN_KMH_V2) += xiangshan/kmh_v2.o
