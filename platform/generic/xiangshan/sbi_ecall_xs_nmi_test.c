@@ -37,19 +37,13 @@ static volatile unsigned long saved_mie;
 
 static inline void disable_interrupts(void)
 {
-    // 保存当前 MIE 状态
-//	 return ; 
     saved_mie = csr_read(CSR_MIE);
-    // 清除机器定时器中断和外部中断 (不关软件中断，因为可能用于IPI)
     csr_clear(CSR_MIE, MIP_MTIP | MIP_MEIP | MIP_MSIP );
-    // 确保写入生效
     asm volatile("fence iorw, iorw" ::: "memory");
 }
 
 static inline void enable_interrupts(void)
 {
-    // 恢复原来的 MIE
-//	 return ; 
     csr_write(CSR_MIE, saved_mie);
     asm volatile("fence iorw, iorw" ::: "memory");
 }
@@ -57,8 +51,6 @@ static inline void enable_interrupts(void)
 /* ----- 自旋延时 (不使用定时器中断) ----- */
 static void spin_delay_us(unsigned long us)
 {
-    // 粗略延时：假设 CPU 频率 1GHz，一个空循环约 2-4 个周期，此处简单循环
-    // 实际可根据需要调整，这里使用 volatile 防止优化
     volatile unsigned long loops = us * 200; // 经验值，可调整
     while (loops--)
         asm volatile("" ::: "memory");
@@ -69,21 +61,6 @@ static void spin_delay_ms(unsigned long ms)
     for (unsigned long i = 0; i < ms; i++)
         spin_delay_us(1000);
 }
-
-/*
-volatile uint64_t  save_pa[100];
-volatile uint64_t  save_cause[100];
-void Get_print_event(void)
-{
-
-//  if (handle_count < 10)
-//	  return ;
-
-  for ( int i=0; i < handle_count; i ++)
-  sbi_printf("✅handle_count =%d ECC Triggered! CAUSE=0x%lx, PA=0x%lx, acc_intr=0x%lx, mncause=0x%lx, mnepc=0x%lx, bit[5:3]=%u\n", i, save_cause[i], save_pa[i], acc_intr, mncause, mnepc, (unsigned int)(((save_pa[i] & 0xFF) >> 3) & 0x7));
-  cause = 0;
-  pa    = 0;  
-}*/
 
 void Get_print_event(void)
 {
@@ -155,10 +132,8 @@ void test_data_ecc_error_all_banks(void)
 //	sbi_printf("BSS end: 0x%p, addr=0x%p, &ecc_test_buf[%d]=0x%p\n", &_bss_end, addr, bank*4, &ecc_test_buf[bank*4]);
 //    sbi_printf("=== Polling-based Data ECC Test ===\n");
 
-    // Step 1: 清理状态
     disable_interrupts();
     init_clear_ecc_injection();
-   // ecc_write(CTRLUNIT_BASE_ADDR + ECCCTL_OFFSET, 0);
     spin_delay_ms(10);
 
     ecc_write(BEU_LOCAL_INTR, 0xFF);  // 禁用所有 BEU 中断
@@ -203,9 +178,7 @@ void test_data_ecc_error_all_banks(void)
          volatile uint64_t dummy = ecc_test_buf[indexa]; //addr
          (void)dummy;  
 	
-//	asm volatile("fence iorw, iorw" ::: "memory");	 
 	 // sbi_printf("Bank %d,back_eid=0x%lx.\n", bank, ecc_read(CTRLUNIT_BASE_ADDR + ECCEID_OFFSET));
-        // Step 7: 清理，准备下一轮
       }
       asm volatile("fence iorw, iorw" ::: "memory");
       enable_interrupts();
@@ -278,11 +251,9 @@ void test_data_Cecc_error_all_banks(void)
     //    sbi_printf("BSS end: 0x%p, addr=0x%p, &ecc_test_buf[%d]=0x%p\n", &_bss_end, addr, bankd*4, &ecc_test_buf[bankd*4]);
 //    sbi_printf("=== Polling-based Data ECC Test ===\n");
 
-    // Step 1: 清理状态
     disable_interrupts();
 
     init_clear_ecc_injection();
-   // ecc_write(CTRLUNIT_BASE_ADDR + ECCCTL_OFFSET, 0);
     spin_delay_ms(10);
 
     ecc_write(BEU_LOCAL_INTR, 0xFF);  // 禁用所有 BEU 中断
@@ -309,14 +280,12 @@ void test_data_Cecc_error_all_banks(void)
         ecc_write(CTRLUNIT_BASE_ADDR + ECCCTL_OFFSET, ctl);
 	asm volatile("fence w, w" ::: "memory");
 
-//      sbi_printf("Bank %d, set_ctl=0x%lx,back_ctl=0x%lx. 1\n", bank, ctl, ecc_read(CTRLUNIT_BASE_ADDR + ECCCTL_OFFSET));
 
     //   }
 
 
    //  sbi_printf("Testing Bank %d.., readback_ecceid=0x%lx. 2\n", bank, ecc_read(CTRLUNIT_BASE_ADDR + ECCEID_OFFSET));
 
-    // Step 4: 强制 Cache Miss
 
  //     for (int loop =0; loop < 10; loop++) {
 //	cbo_cache_flush(&ecc_test_bufc[bankd*4]);
@@ -329,9 +298,6 @@ void test_data_Cecc_error_all_banks(void)
  //     }
       asm volatile("fence iorw, iorw" ::: "memory");
 
-         // sbi_printf("Bank %d,back_eid=0x%lx.\n", bank, ecc_read(CTRLUNIT_BASE_ADDR + ECCEID_OFFSET));
-        // Step 7: 清理，准备下一轮
-     //   sbi_timer_mdelay(10);
  //   }
 	enable_interrupts();
     sbi_printf("=== Polling data C...  ecc, ecc_test_bufc[%d]=0x%p Test Completed ===\n", bankd, &ecc_test_bufc[bankd]);
@@ -353,11 +319,8 @@ __attribute__((aligned(64))) uint64_t ecc_test_bufb[32] ;
 volatile static int bankb = 0;
 void test_tag_ecc_polling(void)
 {
-    // 1. 选安全地址
     extern char _bss_end[];
     extern char _fw_end[];
-  //  uintptr_t  bss_end = (uintptr_t )&_bss_end;
- //   uintptr_t  fw_end  = (uintptr_t )&_fw_end;
     uint64_t *  addr = (uint64_t *) (((uintptr_t)_bss_end + 0x100) & ~0x3FUL); // align to 64B
     
 
@@ -447,34 +410,6 @@ void  Init_Tag_Ecc(void)
 	enable_interrupts();
 }
 
-void  loop_NMItest(void)
-{
-	return ;
-
-  for(int k=0; k<1; k++)
-  {
-	test_data_Decc_error_all_banks();
-	spin_delay_ms(1000);
-	Get_print_event();
-
-    //  	test_data_ecc_error_all_banks( );
-  //	spin_delay_ms(1000);
-    //    Get_print_event();
-
-   //   	test_tag_ecc_polling( );
-    //	spin_delay_ms(1000);
-    //    Get_print_event();
-
-      /*	test_data_Cecc_error_all_banks( );
-        spin_delay_ms(1000);
-	Get_print_event();
-
-        test_data_Decc_error_all_banks( );
-	Get_print_event(); */
-//      sbi_timer_mdelay(1500);
-  }
-
-}
 
 #define ECCCTL_ESE_BIT 0     // error signaling enable
 #define ECCCTL_PST_BIT 1     // persistent injection, not use, we just trigger once ecc error
@@ -557,7 +492,6 @@ static inline bool is_compressed_insn(uintptr_t pc)
 	return (insn & 0x3) != 0x3;
 }
 
-//volatile uint64_t  save_pa[100];
 
 void sbi_handle_nmi(void)
 {
@@ -571,20 +505,11 @@ void sbi_handle_nmi(void)
 
         cause = ecc_read(BEU_CAUSE);
 	pa    = ecc_read(BEU_VALUE);
-//	save_pa[handle_count] = pa;
-//	save_cause[handle_count] = cause;
 	handle_count++ ;
 
 //	readq((volatile u64 *)0x87001300);
         writeq(0x01, (volatile u64 *)0x87001300);
         //value =  readq((volatile u64 *)0x87001300);
-
-	 //sbi_printf("✅ ECC Triggered! CAUSE=0x%lx, PA=0x%lx\n", cause, pa);	
-	
-//	 ecc_write(BEU_CAUSE, 0);
-//	 ecc_write(BEU_VALUE, 0);
-
-//	 ecc_write(BEU_LOCAL_INTR, saved_beu_intr);
 
 	 return ;
 
@@ -611,10 +536,6 @@ void sbi_handle_nmi(void)
      ecc_write(CTRLUNIT_BASE_ADDR + ECCCTL_OFFSET, 0);
      ecc_write(CTRLUNIT_BASE_ADDR + ECCEID_OFFSET, 0);
      ecc_write(BEU_LOCAL_INTR, saved_beu_intr);
-    // 尝试跳过错误指令
-
-    // 直接返回，不清除 BEU（避免访问 BEU 寄存器）
-    // 系统可能继续运行（如果只是单次错误）
 }
 
 
