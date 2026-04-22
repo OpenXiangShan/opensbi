@@ -28,6 +28,7 @@
 #include <libfdt.h>
 #include <sbi_utils/fdt/fdt_helper.h>
 #include <sbi_utils/fdt/fdt_fixup.h>
+#include <sbi/sbi_csr_detect.h>
 #include "kmh_container.h"
 
 #define CPU_N_PWRCTL_BASE(n) \
@@ -79,6 +80,23 @@ static int kmh_v2_extensions_init(const struct fdt_match *match,
                                     struct sbi_hart_features *hfeatures)
 {
     return 0;
+}
+
+static bool kmh_v2_rnmi_available(void)
+{
+    unsigned long val;
+    struct sbi_trap_info trap = {0};
+
+    val = csr_read_allowed(CSR_MNSTATUS, (unsigned long)&trap);
+    if (trap.cause)
+        return false;
+
+    val |= MNSTATUS_NMIE;
+    csr_write_allowed(CSR_MNSTATUS, (unsigned long)&trap, val);
+    if (trap.cause)
+        return false;
+
+    return true;
 }
 
 static void cpu_delaycycle(int cycle_count)
@@ -391,9 +409,23 @@ static int kmh_v2_early_init(bool cold_boot,
 {
     if(dtb_has_hcontext_property())
             csr_write(CSR_HCONTEXT, 0x00);
-		/*setup nmi handler*/
-	csr_write(CSR_MTVEC, &_kmh_v2_nmi_handler);
-	writeq(0,  (volatile uint64_t *)BEU_LOCAL_INTR);
+
+	/*
+	 * FPGA implements RNMI CSRs and can use the KMH RNMI handler directly.
+	 * QEMU bosc-kmh currently does not emulate the RNMI CSR set, so forcing
+	 * mtvec to the RNMI entry makes normal traps enter code that touches
+	 * MNSTATUS/MNCAUSE/MNSCRATCH and hangs the VM.
+	 *
+	 * Only install the RNMI handler when the current hart exposes SMRNMI.
+	 */
+	if (kmh_v2_rnmi_available()) {
+		csr_write(CSR_MTVEC, &_kmh_v2_nmi_handler);
+		writeq(0,  (volatile uint64_t *)BEU_LOCAL_INTR);
+		sbi_printf("%s: RNMI handler enabled\n", __func__);
+	} else {
+		sbi_printf("%s: SMRNMI not available, keep default mtvec for QEMU compatibility\n",
+			   __func__);
+	}
 
     check_fpga_version();
 
