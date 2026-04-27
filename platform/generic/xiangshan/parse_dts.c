@@ -553,6 +553,22 @@ static int replace_bootarg_with_addr(void *fdt, const char *base_args,
     return fdt_setprop_string(fdt, chosen, "bootargs", new_args);
 }
 
+static unsigned long extract_task_addr_from_bootargs(const char *bootargs)
+{
+    const char *task_pos;
+    const char *val_start;
+
+    if (!bootargs)
+        return 0;
+
+    task_pos = my_strstr(bootargs, "task=");
+    if (!task_pos)
+        return 0;
+
+    val_start = task_pos + sbi_strlen("task=");
+    return parse_number(val_start);
+}
+
 static int patch_bootargs_and_task_node(void *fdt, struct platform_config *cfg)
 {
     unsigned long start_addr;
@@ -562,12 +578,23 @@ static int patch_bootargs_and_task_node(void *fdt, struct platform_config *cfg)
         return SBI_EINVAL;
 
     base_args = cfg->cmd.bootargs[0] ? cfg->cmd.bootargs : NULL;
-    start_addr = cfg->cmd.start_addr;
+    start_addr = 0;
 
-    if (!start_addr && base_args && cfg->task_valid)
-        start_addr = CONFIG_TEXT_ADDR + cfg->task.offset;
+    if (base_args) {
+        start_addr = extract_task_addr_from_bootargs(base_args);
+        if (start_addr && cfg->task_valid)
+            start_addr += cfg->task.offset;
 
-    replace_bootarg_with_addr(fdt, base_args, start_addr, true);
+        replace_bootarg_with_addr(fdt, base_args, start_addr, false);
+        return 0;
+    }
+
+    if (cfg->cmd.start_addr && cfg->task_valid)
+        start_addr = cfg->cmd.start_addr + cfg->task.offset;
+    else if (cfg->task_valid)
+        start_addr = cfg->task.start_addr;
+
+    replace_bootarg_with_addr(fdt, NULL, start_addr, true);
 
     return 0;
 }
