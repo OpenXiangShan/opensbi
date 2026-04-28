@@ -469,6 +469,11 @@ static int replace_bootarg_with_addr(void *fdt, const char *base_args,
 {
     const char *key = "task";
     char new_value[32];
+    char key_eq[64];
+    char new_args[MAX_BOOTARGS_LEN];
+    const char *old_args;
+    const char *found;
+    u32 key_len;
 
     if (!fdt)
         return -1;
@@ -484,62 +489,81 @@ static int replace_bootarg_with_addr(void *fdt, const char *base_args,
     }
 
     sbi_snprintf(new_value, sizeof(new_value), "0x%lx", start_addr);
-    const char *old_args = base_args;
+    old_args = base_args;
     if (!old_args)
         old_args = fdt_getprop(fdt, chosen, "bootargs", NULL);
     if (!old_args)
         old_args = "";
 
     /* Construct the 'key=' string */
-    char key_eq[64];
-    u32 key_len = sbi_strlen(key);
+    key_len = sbi_strlen(key);
     if (key_len + 2 > sizeof(key_eq))       // +1 for '=', +1 for '\0'
         return -1;
     sbi_strncpy(key_eq, key, sizeof(key_eq));
     key_eq[key_len] = '=';
     key_eq[key_len + 1] = '\0';
 
-    char new_args[MAX_BOOTARGS_LEN];
-    const char *found = my_strstr(old_args, key_eq);
+    found = my_strstr(old_args, key_eq);
 
     if (found) {
         /* find key=xxx */
-        u32 prefix_len = found - old_args;
-
         /* kip past 'key=' and find the end of the value (space or '\0'). */
-        const char *val_start = found + sbi_strlen(key_eq);
-        const char *val_end = val_start;
+        const char *val_start;
+        const char *val_end;
+        u32 prefix_len;
+        u32 suffix_len;
+        u32 current_len;
+        u32 key_eq_len;
+        u32 new_value_len;
+
+        prefix_len = found - old_args;
+        val_start = found + sbi_strlen(key_eq);
+        val_end = val_start;
         while (*val_end && *val_end != ' ')
             val_end++;
 
-        u32 suffix_len = sbi_strlen(val_end);       /* Including the trailing spaces and parameters. */
+        suffix_len = sbi_strlen(val_end);       /* Including the trailing spaces and parameters. */
 
         /* Construct a new string: prefix + key=new_value + suffix */
         if (prefix_len + sbi_strlen(key_eq) + sbi_strlen(new_value) + suffix_len >= MAX_BOOTARGS_LEN)
             return -1;      /* Insufficient buffer space */
 
-        /* Copy the prefix */
-        sbi_memcpy(new_args, old_args, prefix_len);
-        new_args[prefix_len] = '\0';
+        /* Build: prefix + key_eq + new_value + suffix + '\0' */
+        current_len = 0;
+        key_eq_len = sbi_strlen(key_eq);
+        new_value_len = sbi_strlen(new_value);
 
-        /* Concatenate key=new_value */
-        sbi_strncpy(new_args + prefix_len, key_eq, MAX_BOOTARGS_LEN - prefix_len);
-        u32 pos = prefix_len + sbi_strlen(key_eq);
-        sbi_strncpy(new_args + pos, new_value, MAX_BOOTARGS_LEN - pos - 1);
-        new_args[MAX_BOOTARGS_LEN - 1] = '\0';
-
-        /* Append the suffix (where val_end points to the content after the old value) */
-        u32 current_len = sbi_strlen(new_args);
-        if (current_len < MAX_BOOTARGS_LEN - 1) {
-            sbi_strncpy(new_args + current_len, val_end, MAX_BOOTARGS_LEN - current_len - 1);
+        if (prefix_len) {
+            sbi_memcpy(new_args + current_len, old_args, prefix_len);
+            current_len += prefix_len;
         }
+
+        if (key_eq_len) {
+            sbi_memcpy(new_args + current_len, key_eq, key_eq_len);
+            current_len += key_eq_len;
+        }
+
+        if (new_value_len) {
+            sbi_memcpy(new_args + current_len, new_value, new_value_len);
+            current_len += new_value_len;
+        }
+
+        if (suffix_len) {
+            sbi_memcpy(new_args + current_len, val_end, suffix_len);
+            current_len += suffix_len;
+        }
+
+        new_args[current_len] = '\0';
     } else {
+        u32 old_len;
+        u32 needed;
+
         if (!append_if_missing)
             return fdt_setprop_string(fdt, chosen, "bootargs", old_args);
 
         /* If not found, append to the end */
-        u32 old_len = sbi_strlen(old_args);
-        u32 needed = old_len + (old_len ? 1 : 0) + sbi_strlen(key_eq) + sbi_strlen(new_value);
+        old_len = sbi_strlen(old_args);
+        needed = old_len + (old_len ? 1 : 0) + sbi_strlen(key_eq) + sbi_strlen(new_value);
         if (needed >= MAX_BOOTARGS_LEN)
             return -1;
 
