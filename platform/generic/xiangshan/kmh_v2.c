@@ -415,6 +415,91 @@ static void copy_config_base(char *dst)
         sbi_memcpy(dst, config_base, MAX_CONFIG_SIZE);
 }
 
+static char *find_substr(char *haystack, const char *needle)
+{
+    char *h;
+    const char *n;
+
+    if (!haystack || !needle)
+        return NULL;
+    if (*needle == '\0')
+        return haystack;
+
+    while (*haystack) {
+        h = haystack;
+        n = needle;
+        while (*h && *n && *h == *n) {
+            h++;
+            n++;
+        }
+        if (*n == '\0')
+            return haystack;
+        haystack++;
+    }
+
+    return NULL;
+}
+
+static char *find_section_marker(char *base, const char *marker)
+{
+    char *p;
+
+    if (!base || !marker)
+        return NULL;
+
+    p = find_substr(base, marker);
+    return p;
+}
+
+static void copy_guest_task_section(struct platform_config *cfg)
+{
+    char *src_base;
+    char *dst_base;
+    char *section_start;
+    char *section_end;
+    char *payload_start;
+    size_t payload_len;
+
+    if (!cfg || !cfg->cmd.guest_start_addr)
+        return;
+
+    src_base = (char *)FW_CONFIG_TEXT_ADDR;
+    dst_base = (char *)cfg->cmd.guest_start_addr;
+
+    section_start = find_section_marker(src_base, "[guest_task]");
+    if (!section_start)
+        section_start = find_section_marker(src_base, "[task_guest]");
+    if (!section_start) {
+        sbi_printf("%s: guest task section not found\n", __func__);
+        return;
+    }
+
+    section_end = find_section_marker(section_start, "[guest_task_end]");
+    if (!section_end)
+        section_end = find_section_marker(section_start, "[task_guest_end]");
+    if (!section_end) {
+        sbi_printf("%s: guest task end marker not found\n", __func__);
+        return;
+    }
+
+    payload_start = sbi_strchr(section_start, '\n');
+    if (!payload_start || payload_start >= section_end) {
+        dst_base[0] = '\0';
+        return;
+    }
+    payload_start++;
+
+    while (payload_start < section_end && (*payload_start == '\n' || *payload_start == '\r'))
+        payload_start++;
+
+    payload_len = (size_t)(section_end - payload_start);
+    if (payload_len >= MAX_CONFIG_SIZE)
+        payload_len = MAX_CONFIG_SIZE - 1;
+
+    sbi_memcpy(dst_base, payload_start, payload_len);
+    dst_base[payload_len] = '\0';
+}
+
 static void copy_config_base_to_start_addr(struct platform_config *cfg)
 {
     if (!cfg || !cfg->cmd.start_addr)
@@ -436,7 +521,7 @@ static void copy_config_base_to_guest(struct platform_config *cfg)
     if (!cfg || !cfg->cmd.guest_start_addr)
         return;
 
-    copy_config_base((char *)cfg->cmd.guest_start_addr);
+    copy_guest_task_section(cfg);
     patch_guest_task_copy(cfg);
 }
 static int kmh_v2_early_init(bool cold_boot,
