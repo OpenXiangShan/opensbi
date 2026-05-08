@@ -672,23 +672,6 @@ static char *find_section_line(char *config_base, const char *section_name,
     return NULL;
 }
 
-static char *find_guest_qemu_cmd_line(char *config_base)
-{
-    char *line;
-
-    line = find_section_line(config_base, "[task_guest]",
-                             "[task_guest_end]", "CASE_QEMU_CMD");
-    if (line)
-        return line;
-
-    line = find_section_line(config_base, "[guest_task]",
-                             "[guest_task_end]", "CASE_QEMU_CMD");
-    if (line)
-        return line;
-
-    return find_section_line(config_base, "[task]", "[task_end]", "CASE_QEMU_CMD");
-}
-
 static unsigned long get_task_cmd_target_addr(struct platform_config *cfg)
 {
     if (!cfg)
@@ -753,7 +736,8 @@ static int replace_task_value_in_cmd_line(char *line, unsigned long start_addr,
 }
 
 static void patch_task_cmd_in_copy(char *copy_base, unsigned long task_addr,
-                                   bool prefer_guest_section)
+                                   const char *section_start,
+                                   const char *section_end)
 {
     char *copy_end;
     char *qemu_cmd_line;
@@ -763,26 +747,17 @@ static void patch_task_cmd_in_copy(char *copy_base, unsigned long task_addr,
         return;
 
     copy_end = copy_base + MAX_CONFIG_SIZE;
-    if (prefer_guest_section)
-        qemu_cmd_line = find_guest_qemu_cmd_line(copy_base);
-    else
-        qemu_cmd_line = find_section_line(copy_base, "[task]", "[task_end]",
-                                          "CASE_QEMU_CMD");
+    qemu_cmd_line = find_section_line(copy_base, section_start, section_end,
+                                      "CASE_QEMU_CMD");
 
     if (!qemu_cmd_line) {
-        if (prefer_guest_section)
-            sbi_printf("CFG: CASE_QEMU_CMD not found in guest copy config\n");
-        else
-            sbi_printf("CFG: CASE_QEMU_CMD not found in SRAM [task]\n");
+        sbi_printf("CFG: CASE_QEMU_CMD not found in copy config\n");
         return;
     }
 
     rc = replace_task_value_in_cmd_line(qemu_cmd_line, task_addr, copy_end, NULL);
     if (rc) {
-        if (prefer_guest_section)
-            sbi_printf("CFG: failed to patch guest task address: %d\n", rc);
-        else
-            sbi_printf("CFG: failed to patch SRAM task address: %d\n", rc);
+        sbi_printf("CFG: failed to patch task address: %d\n", rc);
     }
 }
 
@@ -797,19 +772,8 @@ void patch_sram_task_copy(struct platform_config *cfg)
     if (!target_addr)
         return;
 
-    patch_task_cmd_in_copy((char *)cfg->cmd.start_addr, target_addr, false);
-}
-
-void patch_guest_task_copy(struct platform_config *cfg)
-{
-    unsigned long guest_task_addr;
-
-    if (!cfg || !cfg->cmd.guest_start_addr || !cfg->task_guest_valid)
-        return;
-
-    guest_task_addr = cfg->cmd.guest_start_addr + cfg->task_guest.offset;
-    cfg->task_guest.start_addr = guest_task_addr;
-    patch_task_cmd_in_copy((char *)cfg->cmd.guest_start_addr, guest_task_addr, true);
+    patch_task_cmd_in_copy((char *)cfg->cmd.start_addr, target_addr,
+                           "[task]", "[task_end]");
 }
 
 void fdt_modify(void *fdt, struct platform_config *cfg)

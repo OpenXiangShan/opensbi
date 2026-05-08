@@ -522,7 +522,6 @@ static void copy_config_base_to_guest(struct platform_config *cfg)
         return;
 
     copy_guest_task_section(cfg);
-    patch_guest_task_copy(cfg);
 }
 static int kmh_v2_early_init(bool cold_boot,
                 const struct fdt_match *match)

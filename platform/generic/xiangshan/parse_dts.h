@@ -53,7 +53,6 @@ struct platform_config {
 extern int parse_platform_config_from_mem(struct platform_config *cfg);
 extern void fdt_modify(void *fdt, struct platform_config *cfg);
 extern void patch_sram_task_copy(struct platform_config *cfg);
-extern void patch_guest_task_copy(struct platform_config *cfg);
 extern void print_string_at_addr(unsigned long addr);
 extern void print_full_fdt(void);
 #endif
