@@ -205,9 +205,16 @@ int parse_platform_config_from_mem(struct platform_config *cfg)
     char line[MAX_LINE_LEN];
     u32 offset = 0;
     u32 line_pos = 0;
-    u32 line_start_offset = 0;
 
     sbi_memset(cfg, 0, sizeof(*cfg));
+
+#define SKIP_SECTION_SEPARATORS(_base, _off)                    \
+    do {                                                        \
+        while ((_off) < MAX_CONFIG_SIZE &&                      \
+               (((_base)[(_off)] == '\n') ||                    \
+                ((_base)[(_off)] == '\r')))                     \
+            (_off)++;                                           \
+    } while (0)
 
     /* Read character by character and process line by line. */
     while (offset < MAX_CONFIG_SIZE) {
@@ -239,15 +246,17 @@ int parse_platform_config_from_mem(struct platform_config *cfg)
                     cfg->cmd_valid = true;
                 } else if (sbi_strcmp(line, "[task]") == 0) {
                     state = PARSE_STATE_TASK;
-                    cfg->task.offset = line_start_offset;
+                    cfg->task.offset = offset;
+                    SKIP_SECTION_SEPARATORS(config_base, cfg->task.offset);
                     cfg->task_valid = true;
                 } else if (sbi_strcmp(line, "[task_end]") == 0) {
                     state = PARSE_STATE_NONE;
                 } else if (is_section_start(line, "[task_guest]", "[guest_task]")) {
                     state = PARSE_STATE_TASK_GUEST;
-                    cfg->task_guest.offset = line_start_offset;
+                    cfg->task_guest.offset = offset;
+                    SKIP_SECTION_SEPARATORS(config_base, cfg->task_guest.offset);
                     if (cfg->cmd.guest_start_addr)
-                        cfg->task_guest.start_addr = cfg->cmd.guest_start_addr + line_start_offset;
+                        cfg->task_guest.start_addr = cfg->cmd.guest_start_addr;
                     cfg->task_guest_valid = true;
                 } else if (is_section_start(line, "[task_guest_end]", "[guest_task_end]")) {
                     state = PARSE_STATE_NONE;
@@ -262,7 +271,6 @@ int parse_platform_config_from_mem(struct platform_config *cfg)
             }
 
             line_pos = 0;
-            line_start_offset = offset;
             continue;
         }
 
@@ -288,7 +296,7 @@ int parse_platform_config_from_mem(struct platform_config *cfg)
         cfg->task.start_addr = cfg->cmd.start_addr + cfg->task.offset;
 
     if (cfg->task_guest_valid && cfg->cmd.guest_start_addr)
-        cfg->task_guest.start_addr = cfg->cmd.guest_start_addr + cfg->task_guest.offset;
+        cfg->task_guest.start_addr = cfg->cmd.guest_start_addr;
 
     return 0;
 }
@@ -463,164 +471,146 @@ static char *my_strstr(const char *haystack, const char *needle)
     return NULL;
 }
 
-static int replace_bootarg_with_addr(void *fdt, const char *base_args,
-                                     unsigned long start_addr,
-                                     bool append_if_missing)
+static bool bootarg_matches_key(const char *arg, const char *key)
 {
-    const char *key = "task";
-    char new_value[32];
-    char key_eq[64];
-    char new_args[MAX_BOOTARGS_LEN];
-    const char *old_args;
-    const char *found;
     u32 key_len;
 
-    if (!fdt)
-        return -1;
+    if (!arg || !key)
+        return false;
 
-    int chosen = fdt_path_offset(fdt, "/chosen");
-    if (chosen < 0)
-        return chosen;
-
-    if (!start_addr) {
-        if (!base_args)
-            return 0;
-        return fdt_setprop_string(fdt, chosen, "bootargs", base_args);
-    }
-
-    sbi_snprintf(new_value, sizeof(new_value), "0x%lx", start_addr);
-    old_args = base_args;
-    if (!old_args)
-        old_args = fdt_getprop(fdt, chosen, "bootargs", NULL);
-    if (!old_args)
-        old_args = "";
-
-    /* Construct the 'key=' string */
     key_len = sbi_strlen(key);
-    if (key_len + 2 > sizeof(key_eq))       // +1 for '=', +1 for '\0'
-        return -1;
-    sbi_strncpy(key_eq, key, sizeof(key_eq));
-    key_eq[key_len] = '=';
-    key_eq[key_len + 1] = '\0';
-
-    found = my_strstr(old_args, key_eq);
-
-    if (found) {
-        /* find key=xxx */
-        /* kip past 'key=' and find the end of the value (space or '\0'). */
-        const char *val_start;
-        const char *val_end;
-        u32 prefix_len;
-        u32 suffix_len;
-        u32 current_len;
-        u32 key_eq_len;
-        u32 new_value_len;
-
-        prefix_len = found - old_args;
-        val_start = found + sbi_strlen(key_eq);
-        val_end = val_start;
-        while (*val_end && *val_end != ' ')
-            val_end++;
-
-        suffix_len = sbi_strlen(val_end);       /* Including the trailing spaces and parameters. */
-
-        /* Construct a new string: prefix + key=new_value + suffix */
-        if (prefix_len + sbi_strlen(key_eq) + sbi_strlen(new_value) + suffix_len >= MAX_BOOTARGS_LEN)
-            return -1;      /* Insufficient buffer space */
-
-        /* Build: prefix + key_eq + new_value + suffix + '\0' */
-        current_len = 0;
-        key_eq_len = sbi_strlen(key_eq);
-        new_value_len = sbi_strlen(new_value);
-
-        if (prefix_len) {
-            sbi_memcpy(new_args + current_len, old_args, prefix_len);
-            current_len += prefix_len;
-        }
-
-        if (key_eq_len) {
-            sbi_memcpy(new_args + current_len, key_eq, key_eq_len);
-            current_len += key_eq_len;
-        }
-
-        if (new_value_len) {
-            sbi_memcpy(new_args + current_len, new_value, new_value_len);
-            current_len += new_value_len;
-        }
-
-        if (suffix_len) {
-            sbi_memcpy(new_args + current_len, val_end, suffix_len);
-            current_len += suffix_len;
-        }
-
-        new_args[current_len] = '\0';
-    } else {
-        u32 old_len;
-        u32 needed;
-
-        if (!append_if_missing)
-            return fdt_setprop_string(fdt, chosen, "bootargs", old_args);
-
-        /* If not found, append to the end */
-        old_len = sbi_strlen(old_args);
-        needed = old_len + (old_len ? 1 : 0) + sbi_strlen(key_eq) + sbi_strlen(new_value);
-        if (needed >= MAX_BOOTARGS_LEN)
-            return -1;
-
-        if (old_len > 0) {
-            sbi_snprintf(new_args, MAX_BOOTARGS_LEN, "%s %s%s", old_args, key_eq, new_value);
-        } else {
-            sbi_snprintf(new_args, MAX_BOOTARGS_LEN, "%s%s", key_eq, new_value);
-        }
-    }
-
-    return fdt_setprop_string(fdt, chosen, "bootargs", new_args);
+    return (sbi_strncmp(arg, key, key_len) == 0 && arg[key_len] == '=');
 }
 
-static unsigned long extract_task_addr_from_bootargs(const char *bootargs)
+static int rebuild_bootargs(char *dst, const char *src,
+                            unsigned long task_addr,
+                            unsigned long guest_task_addr)
 {
-    const char *task_pos;
-    const char *val_start;
+    char src_copy[MAX_BOOTARGS_LEN];
+    char token[MAX_BOOTARGS_LEN];
+    char addr_buf[32];
+    u32 out_len = 0;
+    const char *p;
 
-    if (!bootargs)
-        return 0;
+    if (!dst)
+        return SBI_EINVAL;
 
-    task_pos = my_strstr(bootargs, "task=");
-    if (!task_pos)
-        return 0;
+    if (src) {
+        sbi_strncpy(src_copy, src, sizeof(src_copy) - 1);
+        src_copy[sizeof(src_copy) - 1] = '\0';
+        p = src_copy;
+    } else {
+        src_copy[0] = '\0';
+        p = src_copy;
+    }
 
-    val_start = task_pos + sbi_strlen("task=");
-    return parse_number(val_start);
+    dst[0] = '\0';
+
+    while (*p) {
+        u32 token_len = 0;
+
+        while (*p == ' ')
+            p++;
+        if (!*p)
+            break;
+
+        while (p[token_len] && p[token_len] != ' ')
+            token_len++;
+        if (token_len >= sizeof(token))
+            return SBI_ENOSPC;
+
+        sbi_memcpy(token, p, token_len);
+        token[token_len] = '\0';
+
+        if (!bootarg_matches_key(token, "task") &&
+            !bootarg_matches_key(token, "guest_task")) {
+            if (out_len && out_len < MAX_BOOTARGS_LEN - 1)
+                dst[out_len++] = ' ';
+            if (out_len + token_len >= MAX_BOOTARGS_LEN)
+                return SBI_ENOSPC;
+            sbi_memcpy(dst + out_len, token, token_len);
+            out_len += token_len;
+            dst[out_len] = '\0';
+        }
+
+        p += token_len;
+    }
+
+    if (task_addr) {
+        sbi_snprintf(addr_buf, sizeof(addr_buf), "task=0x%lx", task_addr);
+        if (out_len && out_len < MAX_BOOTARGS_LEN - 1)
+            dst[out_len++] = ' ';
+        if (out_len + sbi_strlen(addr_buf) >= MAX_BOOTARGS_LEN)
+            return SBI_ENOSPC;
+        sbi_strncpy(dst + out_len, addr_buf, MAX_BOOTARGS_LEN - out_len - 1);
+        out_len += sbi_strlen(addr_buf);
+    }
+
+    if (guest_task_addr) {
+        sbi_snprintf(addr_buf, sizeof(addr_buf), "guest_task=0x%lx", guest_task_addr);
+        if (out_len && out_len < MAX_BOOTARGS_LEN - 1)
+            dst[out_len++] = ' ';
+        if (out_len + sbi_strlen(addr_buf) >= MAX_BOOTARGS_LEN)
+            return SBI_ENOSPC;
+        sbi_strncpy(dst + out_len, addr_buf, MAX_BOOTARGS_LEN - out_len - 1);
+        out_len += sbi_strlen(addr_buf);
+    }
+
+    dst[out_len] = '\0';
+    return 0;
 }
 
 static int patch_bootargs_and_task_node(void *fdt, struct platform_config *cfg)
 {
-    unsigned long start_addr;
+    char bootargs[MAX_BOOTARGS_LEN];
+    unsigned long task_addr = 0;
+    unsigned long guest_task_addr = 0;
     const char *base_args;
+    const char *old_args;
+    int chosen;
+    int rc;
 
     if (!fdt || !cfg)
         return SBI_EINVAL;
 
     base_args = cfg->cmd.bootargs[0] ? cfg->cmd.bootargs : NULL;
-    start_addr = 0;
+    chosen = fdt_path_offset(fdt, "/chosen");
+    if (chosen < 0)
+        return chosen;
 
     if (base_args) {
-        start_addr = extract_task_addr_from_bootargs(base_args);
-        if (start_addr && cfg->task_valid)
-            start_addr += cfg->task.offset;
-
-        replace_bootarg_with_addr(fdt, base_args, start_addr, false);
-        return 0;
+        sbi_strncpy(bootargs, base_args, sizeof(bootargs) - 1);
+        bootargs[sizeof(bootargs) - 1] = '\0';
+    } else {
+        old_args = fdt_getprop(fdt, chosen, "bootargs", NULL);
+        if (!old_args)
+            old_args = "";
+        sbi_strncpy(bootargs, old_args, sizeof(bootargs) - 1);
+        bootargs[sizeof(bootargs) - 1] = '\0';
     }
 
     if (cfg->cmd.start_addr && cfg->task_valid)
-        start_addr = cfg->cmd.start_addr + cfg->task.offset;
+        task_addr = cfg->cmd.start_addr + cfg->task.offset;
     else if (cfg->task_valid)
-        start_addr = cfg->task.start_addr;
+        task_addr = cfg->task.start_addr;
 
-    replace_bootarg_with_addr(fdt, NULL, start_addr, true);
+    if (cfg->cmd.guest_start_addr && cfg->task_guest_valid)
+        guest_task_addr = cfg->cmd.guest_start_addr;
+    else if (cfg->task_guest_valid)
+        guest_task_addr = cfg->task_guest.start_addr;
 
-    return 0;
+    sbi_printf("CFG: start_addr=0x%lx task.offset=0x%x task_addr=0x%lx\n",
+               cfg->cmd.start_addr, cfg->task.offset, task_addr);
+    sbi_printf("CFG: guest_start_addr=0x%lx guest_task.offset=0x%x guest_task_addr=0x%lx\n",
+               cfg->cmd.guest_start_addr, cfg->task_guest.offset, guest_task_addr);
+
+    rc = rebuild_bootargs(bootargs, bootargs, task_addr, guest_task_addr);
+    if (rc)
+        return rc;
+
+    sbi_printf("CFG: final bootargs=\"%s\"\n", bootargs);
+
+    return fdt_setprop_string(fdt, chosen, "bootargs", bootargs);
 }
 
 static char *skip_inline_space(char *p)
