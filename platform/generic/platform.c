@@ -65,6 +65,8 @@ static u32 fw_platform_calculate_heap_size(u32 hart_count)
 
 	/* For TLB fifo */
 	heap_size += SBI_TLB_INFO_SIZE * (hart_count) * (hart_count);
+	/* Leave room for SSE and other warmboot per-hart allocations. */
+	heap_size += 0x20000;
 
 	return BIT_ALIGN(heap_size, HEAP_BASE_ALIGN);
 }
