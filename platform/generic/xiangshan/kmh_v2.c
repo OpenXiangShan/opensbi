@@ -523,10 +523,41 @@ static void copy_config_base_to_guest(struct platform_config *cfg)
 
     copy_guest_task_section(cfg);
 }
+
+static bool kmh_match_is_bosc_soc(const struct fdt_match *match)
+{
+    return match && match->data;
+}
+
+static void kmh_trigger_overlay_init(void)
+{
+    struct platform_config cfg;
+    int err;
+    void *fdt = (void *)FDT_ADDR;
+
+    if (has_check_trigger)
+        return;
+
+    has_check_trigger = 1;
+    parse_platform_config_from_mem(&cfg);
+
+    copy_config_base_to_start_addr(&cfg);
+    patch_config_base_in_start_addr(&cfg);
+    copy_config_base_to_guest(&cfg);
+
+    err = fdt_check_header(fdt);
+    if (!err)
+        fdt_modify(fdt, &cfg);
+}
+
 static int kmh_v2_early_init(bool cold_boot,
                 const struct fdt_match *match)
 {
 
+    if (kmh_match_is_bosc_soc(match)) {
+        kmh_trigger_overlay_init();
+        return 0;
+    }
 
     if(dtb_has_hcontext_property())
             csr_write(CSR_HCONTEXT, 0x00);
@@ -550,22 +581,7 @@ static int kmh_v2_early_init(bool cold_boot,
 
     check_fpga_version();
 
-    struct platform_config cfg;
-    int err;
-    void *fdt = (void *)FDT_ADDR;
-
-    if (!has_check_trigger) {
-        has_check_trigger = 1;
-        parse_platform_config_from_mem(&cfg);
-    
-        copy_config_base_to_start_addr(&cfg);
-        patch_config_base_in_start_addr(&cfg);
-        copy_config_base_to_guest(&cfg);
-
-        err = fdt_check_header(fdt);
-        if (!err)
-            fdt_modify(fdt, &cfg);
-    }
+    kmh_trigger_overlay_init();
 
     return 0;
 }
@@ -577,6 +593,9 @@ static int kmh_v2_final_init(bool cold_boot,
     u32 hartid = 0;
     struct kmh_powerdown_ipi_info *ipi_info;
     static bool has_print = 0;
+
+    if (kmh_match_is_bosc_soc(match))
+        return 0;
 
     if (!has_print) {
         has_print = 1;
@@ -630,6 +649,7 @@ static int kmh_v2_final_init(bool cold_boot,
 
 static const struct fdt_match kmh_v2_match[] = {
     { .compatible = "bosc,kmh-v2-dev" },
+    { .compatible = "bosc,kmh-bosc-soc", .data = (const void *)true },
     { },
 };
 
